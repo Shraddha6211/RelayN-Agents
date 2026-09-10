@@ -1,0 +1,7 @@
+services:
+  relayn-agents:
+    build: .
+    ports:
+      - "8002:8002"          # beside relayn_services (:8001) and a custom-tier (:8000)
+    env_file: .env
+    restart: unless-stopped

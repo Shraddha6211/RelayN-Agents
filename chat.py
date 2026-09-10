@@ -1,18 +1,20 @@
 """Interactive CLI to chat with the RelayN agent.
 
-    python chat.py                # in-memory checkpointer (no Redis needed)
-    python chat.py --redis        # use the real PruningAsyncRedisSaver
-    python chat.py --thread demo1 # set the starting thread id
+    python chat.py                                   # in-memory checkpointer
+    python chat.py --redis                           # real Redis checkpointer
+    python chat.py --org <uuid> --workflow <uuid>    # scope RAG to a real workflow
+    python chat.py --thread demo1                    # set the starting thread id
 
-Runs the compiled LangGraph directly (same path as tests/test_graph.py), so
+Drives the compiled LangGraph directly (same path as tests/test_graph.py), so
 the router and generator make real OpenAI calls and PRODUCT_QA / PRICING hit
 Supabase's match_workflow_kb_chunks. Wizard state (demo_step, sales_step, ...)
 persists across turns within the session.
 
-Requires a real OPENAI_API_KEY in .env. For grounded PRODUCT_QA/PRICING answers
-also set real SUPABASE_URL / SUPABASE_SERVICE_KEY and a RELAYN_WORKFLOW_ID that
-actually has ingested chunks; otherwise retrieval just comes back empty and the
-generator says it doesn't have that detail.
+Env resolution for the two scope ids, highest priority first:
+  1. --org / --workflow flags
+  2. RELAYN_ORG_ID / RELAYN_WORKFLOW_ID already in the environment or .env
+  3. a non-UUID placeholder — the conversation flows still work, but any
+     PRODUCT_QA / PRICING turn will error because the RPC needs real UUIDs.
 
 Commands: /help  /state  /reset  /quit
 """
@@ -21,16 +23,39 @@ import asyncio
 import json
 import os
 
-# The service pins these; the CLI only needs them to exist so config.py can
-# construct. Real OPENAI_API_KEY / SUPABASE_* still load from .env.
-os.environ.setdefault("RELAYN_ORG_ID", "cli-local-org")
-os.environ.setdefault("RELAYN_WORKFLOW_ID", "cli-local-workflow")
-os.environ.setdefault("RELAYN_SERVICES_URL", "http://localhost:8001")
+from langchain_core.messages import HumanMessage
 
-from langchain_core.messages import HumanMessage  # noqa: E402
 
-from agent.graph import build_workflow  # noqa: E402
-from config import settings  # noqa: E402
+def _bootstrap_env(org: str | None, workflow: str | None) -> bool:
+    """Populate the env config.py needs. Returns True if RAG is usable."""
+    if org:
+        os.environ["RELAYN_ORG_ID"] = org
+    if workflow:
+        os.environ["RELAYN_WORKFLOW_ID"] = workflow
+
+    # Pull anything still missing from a local .env before we placeholder it.
+    try:
+        from dotenv import dotenv_values
+
+        file_vals = dotenv_values(".env")
+    except Exception:
+        file_vals = {}
+
+    def ensure(key: str, placeholder: str) -> str:
+        if os.environ.get(key):
+            return os.environ[key]
+        if file_vals.get(key):
+            os.environ[key] = file_vals[key]
+            return file_vals[key]
+        os.environ[key] = placeholder
+        return placeholder
+
+    org_val = ensure("RELAYN_ORG_ID", "cli-local-org")
+    wf_val = ensure("RELAYN_WORKFLOW_ID", "cli-local-workflow")
+    ensure("RELAYN_SERVICES_URL", "http://localhost:8001")
+
+    return "cli-local" not in org_val and "cli-local" not in wf_val
+
 
 BANNER = "relayn_agents CLI — type a message, or /help. Ctrl+D or /quit to exit."
 
@@ -57,6 +82,8 @@ def _dump_state(state: dict) -> str:
 
 
 async def _make_app(use_redis: bool):
+    from agent.graph import build_workflow
+
     if not use_redis:
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -64,6 +91,7 @@ async def _make_app(use_redis: bool):
 
     import redis.asyncio as aioredis
 
+    from config import settings
     from db.redis import PruningAsyncRedisSaver, init_semantic_cache
 
     init_semantic_cache()
@@ -81,7 +109,13 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Chat with the RelayN agent from the CLI.")
     parser.add_argument("--redis", action="store_true", help="use the real Redis checkpointer")
     parser.add_argument("--thread", default="cli-1", help="starting thread id (default: cli-1)")
+    parser.add_argument("--org", help="RELAYN_ORG_ID (uuid) to scope retrieval")
+    parser.add_argument("--workflow", help="RELAYN_WORKFLOW_ID (uuid) to scope retrieval")
     args = parser.parse_args()
+
+    rag_ready = _bootstrap_env(args.org, args.workflow)
+
+    from config import settings
 
     app, redis_client = await _make_app(args.redis)
     thread = args.thread
@@ -89,7 +123,11 @@ async def main() -> None:
     last_state: dict = {}
 
     print(BANNER)
-    print(f"thread: {thread}  |  checkpointer: {'redis' if args.redis else 'memory'}\n")
+    print(f"thread: {thread}  |  checkpointer: {'redis' if args.redis else 'memory'}")
+    if not rag_ready:
+        print("note: no real RELAYN_ORG_ID / RELAYN_WORKFLOW_ID — PRODUCT_QA / PRICING")
+        print("      turns will error. Pass --org <uuid> --workflow <uuid> to enable RAG.")
+    print()
 
     try:
         while True:
@@ -101,7 +139,6 @@ async def main() -> None:
 
             if not line:
                 continue
-
             if line in ("/quit", "/exit"):
                 break
             if line == "/help":
@@ -132,7 +169,10 @@ async def main() -> None:
             try:
                 last_state = await app.ainvoke(state_in, cfg)
             except Exception as e:  # keep the REPL alive on an API/network error
-                print(f"!! {type(e).__name__}: {e}\n")
+                print(f"!! {type(e).__name__}: {e}")
+                if "uuid" in str(e).lower():
+                    print("   (retrieval needs real UUIDs — restart with --org / --workflow)")
+                print()
                 continue
 
             reply = last_state["messages"][-1].content if last_state.get("messages") else "(no reply)"

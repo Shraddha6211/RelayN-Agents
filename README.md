@@ -45,16 +45,37 @@ Drives the compiled graph directly. Needs a real `OPENAI_API_KEY`; for grounded
 
 ## Knowledge base
 
+`scripts/ingest_kb.py` chunks + embeds text and writes it straight into Supabase
+(`workflow_knowledge_base` + `workflow_kb_chunks`) for the pinned workflow. It is
+self-contained — no `relayn_services` deployment needed.
+
 ```bash
-python -m scripts.scrape_relayn_site
+# one-time: create the RelayN workflow row, print the .env lines to add
+python -m scripts.ingest_kb --setup --org <org-uuid>
+
+# ingest every kb/*.md and kb/*.txt (the default source)
+python -m scripts.ingest_kb
+
+# or point it at specific files / pages
+python -m scripts.ingest_kb --file kb/relayn.md --url https://example.com/docs
 ```
 
-Scrapes relayn.com into the pinned workflow's `workflow_knowledge_base` rows and
-triggers the shared `relayn_services` `/ingest-knowledge-base` to chunk + embed
-into `workflow_kb_chunks`.
+Re-running replaces the workflow's previously ingested `text` rows and their
+chunks. Edit `kb/relayn.md` (and add more `kb/*.md` files) with real product,
+pricing, and FAQ content — that text is what `PRODUCT_QA` / `PRICING` answers
+are grounded on. `relayn.com` itself is a client-rendered SPA and yields no
+usable text, so scraping it is not wired up.
 
 ## Before first deploy
 
 - Apply `docs/DB_MIGRATION.md` (adds `chat_turns.flow_capture`).
-- Confirm the open items in the spec (§12): lead-scoring coverage for the RelayN
-  org, `workflow_knowledge_base` column names, relayn.com sitemap.
+- Confirm the one remaining spec open item (§12 OI-1): whether the shared
+  `chat_turns` scoring trigger covers the RelayN org.
+
+### Current setup (dev)
+
+- Org: `b0c278a3-1401-4da4-b54e-57606eb809aa` (the only org in the shared project)
+- Workflow: `RelayN Assistant` (`workflow_type = ai_chatbot`), created by
+  `ingest_kb --setup`. Its id and the org id are in `.env` as
+  `RELAYN_WORKFLOW_ID` / `RELAYN_ORG_ID`.
+- KB: `kb/relayn.md` ingested → chunks in `workflow_kb_chunks`.

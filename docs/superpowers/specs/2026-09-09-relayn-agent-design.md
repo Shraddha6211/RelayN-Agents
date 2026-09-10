@@ -44,7 +44,7 @@ single-tenant (the RelayN org itself).
 - RAG over the RelayN workflow's `workflow_kb_chunks` via the shared RPC
 - Hardcoded RelayN persona and prompts
 - Intent collapse to `RAG` / `ORDER` / `CHAT` for logging
-- `scripts/scrape_relayn_site.py` to populate the knowledge base
+- `scripts/ingest_kb.py` (self-contained chunk + embed + write) to populate the knowledge base from `kb/*.md`
 - One additive nullable `jsonb` column on `chat_turns` for demo/sales capture
 
 ### Out of scope (v1)
@@ -114,7 +114,7 @@ empty checkpoint).
 | Clients | `clients.py` | `relayn_services/clients.py` | `supabase_client` (service key) + `embeddings` (`text-embedding-3-small`, 1536). |
 | Config | `config.py` | `relayn_services/config.py` | Add `RELAYN_ORG_ID`, `RELAYN_WORKFLOW_ID`, `RELAYN_SERVICES_URL`, `REDIS_*`. |
 | Schemas | `schemas.py` | `relayn_services/schemas.py` | Request/response models (Section 3.4). |
-| KB scraper | `scripts/scrape_relayn_site.py` | new | Section 6. |
+| KB ingest | `scripts/ingest_kb.py` | new | Section 6. Self-contained. |
 
 ### 3.4 Request / response schemas (`schemas.py`)
 
@@ -328,9 +328,18 @@ depends on it, and nothing here can regress `angan_services`' scoring.
 
 ## 6. Knowledge base
 
-### 6.1 Ingestion 
+### 6.1 Ingestion
 
-Get Markdown format file with the information about RelayN from the deverloper. It will be stored locally inside the main directory, the chunks and embedding generated thereafter should be stored in the supabase database, workflow_knowledge_base, workflow_kb_chunks tables and embeddings also in similar way. 
+Knowledge lives as local Markdown/text under `kb/` (starter: `kb/relayn.md`,
+written from the product description — `relayn.com` is a client-rendered SPA and
+yields no scrapable text). `scripts/ingest_kb.py` is **self-contained**: it
+chunks (`RecursiveCharacterTextSplitter`, 500 / 50), embeds
+(`text-embedding-3-small`, 1536) via `clients.embeddings`, and writes directly
+to `workflow_knowledge_base` (one `source_type='text'` row per source) and
+`workflow_kb_chunks` (`knowledge_base_id, workflow_id, organization_id, content,
+embedding`), scoped to `RELAYN_ORG_ID` / `RELAYN_WORKFLOW_ID`. It does **not**
+call `relayn_services`. Re-running replaces the workflow's prior `text` rows and
+their chunks. `--setup` creates the RelayN `workflows` row.
 
 Run manually or on a cron. Not triggered by conversation traffic.
 
@@ -460,23 +469,21 @@ A command line testing file should also be made under `tests/test_system`. for t
    `handoff_requested`.
 4. Adding a nullable `chat_turns.flow_capture` column is acceptable in the shared
    schema and requires no coordination beyond this doc.
-5. The shared `/ingest-knowledge-base` endpoint accepts a plain
-   `{ workflow_id }` POST and is reachable from wherever the scraper runs.
-
 ---
 
-## 12. Open items (non-blocking)
+## 12. Open items
 
-- **OI-1** Whether the shared `chat_turns` scoring edge function already covers
-  the RelayN org, or a custom `/lead/recompute` must be added later. Design is
-  safe either way (Section 5.2).
-- **OI-2** Exact column/field names on `workflow_knowledge_base`
-  (`source_url`? `ingest_status` values) — confirm against the live table before
-  writing the scraper's upsert.
-- **OI-3** Whether `relayn.com` publishes `sitemap.xml`; if not, the seed URL
-  list is the fallback.
-- **OI-4** Final name for the `chat_turns` capture column (`flow_capture`
-  proposed).
+- **OI-1 (open, non-blocking)** Whether the shared `chat_turns` scoring edge
+  function already covers the RelayN org, or a custom `/lead/recompute` must be
+  added later. Design is safe either way (Section 5.2).
+- **OI-2 (resolved)** `workflow_knowledge_base` columns: `id, created_at,
+  updated_at, organization_id, workflow_id, source_type, raw_text,
+  pdf_storage_path, ingest_status`. **No `source_url`.** Ingest keys idempotency
+  off `workflow_id` + `source_type='text'`.
+- **OI-3 (resolved)** `relayn.com` is a client-rendered SPA — every page returns
+  the same skeleton HTML. Scraping it is abandoned; the KB source is local
+  `kb/*.md`.
+- **OI-4 (resolved)** Column name is `flow_capture` (see `docs/DB_MIGRATION.md`).
 
   # Development Workflow
 - Always build incrementally. Never generate an entire feature or file at once.

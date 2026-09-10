@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     RELAYN_ORG_ID: str
     RELAYN_WORKFLOW_ID: str
 
-    # Base URL of the shared relayn_services deployment; used only by the
-    # offline KB scraper to trigger chunk+embed.
-    RELAYN_SERVICES_URL: str
+    # Base URL of the shared relayn_services deployment. Optional — the KB
+    # ingest script is self-contained and does not call it; kept for parity.
+    RELAYN_SERVICES_URL: str = "http://localhost:8001"
 
     @property
     def REDIS_URL(self) -> str:

@@ -1,7 +1,7 @@
 # agent/nodes.py
 from langchain_core.messages import SystemMessage
 
-from agent.prompts import DEMO_QUESTIONS, format_question
+from agent.prompts import DEMO_QUESTIONS, SALES_QUESTIONS, format_question
 from agent.state import AgentState
 
 
@@ -110,5 +110,77 @@ async def demo_end_node(state: AgentState) -> dict:
         "demo_data": {},
         "demo_completed": False,
         "intent": "STOP_DEMO",
+        "tool_data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SALES FLOW
+# ---------------------------------------------------------------------------
+
+async def sales_node(state: AgentState) -> dict:
+    step = state.get("sales_step", 0)
+    data = dict(state.get("sales_data") or {})
+    tool_data = state.get("tool_data")
+    user_msg = state["messages"][-1].content.strip()
+    total = len(SALES_QUESTIONS)
+
+    # 1. INIT
+    if tool_data == "START_SALES":
+        return {
+            "messages": [SystemMessage(content=format_question(SALES_QUESTIONS[0], 1, total))],
+            "sales_step": 1,
+            "sales_data": {},
+            "sales_completed": False,
+            "intent": "CONTACT_SALES",
+            "tool_data": None,
+        }
+
+    # 2. STORE PREVIOUS ANSWER (all sales questions are open)
+    if step > 0:
+        data[SALES_QUESTIONS[step - 1]["key"]] = user_msg
+
+    # 3. COMPLETE
+    if step >= total:
+        msg = (
+            f"Thanks — I've passed this to our sales team:\n\n{_wizard_summary(data)}\n\n"
+            "Someone will be in touch shortly. [SALES_REQUEST]"
+        )
+        return {
+            "messages": [SystemMessage(content=msg)],
+            "sales_step": 0,
+            "sales_data": data,
+            "sales_completed": True,
+            "intent": "CONTACT_SALES",
+            "tool_data": None,
+        }
+
+    # 4. ASK NEXT
+    q = SALES_QUESTIONS[step]
+    return {
+        "messages": [SystemMessage(content=format_question(q, step + 1, total))],
+        "sales_step": step + 1,
+        "sales_data": data,
+        "intent": "CONTACT_SALES",
+        "tool_data": None,
+    }
+
+
+async def sales_end_node(state: AgentState) -> dict:
+    answered = len(state.get("sales_data") or {})
+    name = state.get("user_data", {}).get("user_name", "there")
+    if answered == 0:
+        msg = f"No problem, {name} — cancelled. What else can I help with?"
+    else:
+        msg = (
+            f"Got it, {name} — I've stopped that. You'd answered {answered} "
+            "question(s); nothing was saved. Say 'contact sales' to start again."
+        )
+    return {
+        "messages": [SystemMessage(content=msg)],
+        "sales_step": 0,
+        "sales_data": {},
+        "sales_completed": False,
+        "intent": "STOP_SALES",
         "tool_data": None,
     }

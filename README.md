@@ -31,6 +31,18 @@ pytest -q
 
 Or `docker compose up --build` (published on `:8002`).
 
+## Chat with it from the CLI
+
+```bash
+python chat.py            # in-memory checkpointer, no Redis needed
+python chat.py --redis    # use the real Redis checkpointer
+```
+
+Drives the compiled graph directly. Needs a real `OPENAI_API_KEY`; for grounded
+`PRODUCT_QA` / `PRICING` answers also set real Supabase creds and a
+`RELAYN_WORKFLOW_ID` that has ingested chunks. Commands: `/help` `/state`
+`/reset` `/quit`.
+
 ## Knowledge base
 
 ```bash

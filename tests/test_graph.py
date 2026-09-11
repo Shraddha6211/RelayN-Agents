@@ -18,13 +18,19 @@ def test_route_decision_maps_every_intent():
         assert route_decision({"intent": intent}) == node
 
 
-def test_demo_flow_persists_step_across_invocations():
+def test_demo_flow_persists_step_across_invocations(monkeypatch):
     """Router locks the flow; checkpointer carries demo_step turn to turn.
 
     No LLM is mocked because no LLM is reached: the keyword fast path starts the
     flow, then the active-demo lock holds every following turn.
     """
     import agent.graph as graph_mod
+    import agent.nodes as nodes
+
+    async def extract(message, _data):
+        return {"business_name": message}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
 
     app = graph_mod.build_workflow().compile(checkpointer=MemorySaver())
     cfg = {"configurable": {"thread_id": "t1"}}

@@ -1,0 +1,22 @@
+gold_set = [
+    {
+        "question": "Which messaging channels does RelayN currently support?",
+        "ground_truth": "RelayN currently supports WhatsApp, Instagram, and Facebook Messenger."
+    },
+    {
+        "question": "How much does the Professional plan cost, and how many accounts and messages does it include?",
+        "ground_truth": "The Professional plan costs $20/month, supports up to 10 accounts, and includes 10,000 messages/month."
+    },
+    {
+        "question": "Can a human review an AI-generated response before it is sent to a customer?",
+        "ground_truth": "Yes. RelayN provides AI-assisted replies that can be reviewed by a human agent before being sent."
+    },
+    {
+        "question": "What are the three steps for a business to start using RelayN?",
+        "ground_truth": "The three steps are Connect Accounts, Configure the System, and Start Messaging."
+    },
+    {
+        "question": "What collaboration features does RelayN provide for teams?",
+        "ground_truth": "RelayN allows team members to be assigned to conversations and lets teammates add internal notes. It also supports team roles and collaboration."
+    }
+]

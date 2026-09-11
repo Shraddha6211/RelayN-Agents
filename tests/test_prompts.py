@@ -12,6 +12,18 @@ def test_demo_questions_shape():
         assert all("id" in o and "title" in o for o in q["options"])
 
 
+def test_demo_extraction_prompt_requires_all_slots():
+    from agent.prompts import DEMO_EXTRACTION_SYSTEM_PROMPT
+
+    for key in (
+        "business_name", "channels", "monthly_volume",
+        "contact_name", "contact_info", "preferred_time",
+    ):
+        assert key in DEMO_EXTRACTION_SYSTEM_PROMPT
+    assert "several fields at once" in DEMO_EXTRACTION_SYSTEM_PROMPT
+    assert "Return null" in DEMO_EXTRACTION_SYSTEM_PROMPT
+
+
 def test_sales_questions_shape():
     from agent.prompts import SALES_QUESTIONS
 
@@ -51,3 +63,12 @@ def test_generator_prompt_has_expected_slots():
     for token in ("{{BUSINESS_NAME}}", "{{PERSONA}}", "{{TONE}}",
                   "{{CONTACT_INFO}}", "{{TOOL_DATA}}", "{{USER_QUERY}}"):
         assert token in GENERATOR_SYSTEM_PROMPT
+
+
+def test_prompts_keep_unrelated_requests_out_of_scope():
+    from agent.prompts import GENERATOR_SYSTEM_PROMPT, ROUTER_SYSTEM_PROMPT
+
+    assert "Do not teach, explain, debug, or generate code" in GENERATOR_SYSTEM_PROMPT
+    assert all(language in GENERATOR_SYSTEM_PROMPT for language in ("Java", "JavaScript", "Python", "SQL"))
+    assert "outside RelayN" in ROUTER_SYSTEM_PROMPT
+    assert "programming question" in ROUTER_SYSTEM_PROMPT

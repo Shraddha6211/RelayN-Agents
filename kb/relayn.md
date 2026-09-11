@@ -35,11 +35,73 @@ inbox so a team can manage every customer interaction from one place.
 
 WhatsApp, Instagram, and Facebook Messenger. (Add others here as they ship.)
 
-## Pricing
+# What RelayN AI Does
 
-<!-- TODO: replace with real plan names, prices, and limits. -->
-Pricing is not yet documented in this knowledge base. For current plans and
-pricing, point the customer to the RelayN team.
+RelayN is positioned as an **AI-powered customer messaging platform for businesses**.
+
+## Main Idea
+- Bring WhatsApp + Instagram + Facebook conversations into one dashboard and add AI/automation on top.
+- Instead of a business employee switching between:
+  - WhatsApp
+  - Instagram
+  - Facebook Messenger
+- RelayN provides **one unified inbox**.
+- The website describes it as an “**all-in-one AI messaging hub**.”
+
+## Features
+1. **Unified Inbox**
+   - Messages from WhatsApp, Instagram, Facebook are brought into one interface.
+   - The goal is that the business doesn't need to manage each platform separately.
+2. **AI Assistant**
+   - Helps generate responses and learns from conversations to assist teams in responding faster.
+   - Likely the part currently being developed from an engineering perspective.
+3. **Real-time Synchronization**
+   - Messages are synchronized across connected platforms in real time.
+4. **Smart Broadcasting**
+   - Send targeted messages using segmentation and scheduling instead of manual individual messaging.
+5. **Analytics**
+   - Provides insights on response times, engagement, team performance.
+6. **Product Catalog**
+   - Share products directly through conversations with previews, pricing, checkout links.
+
+## How a Business Joins
+The onboarding process involves three steps:
+1. Connect accounts
+2. Customize setup
+3. Start messaging
+
+### Step 1 — Connect Accounts
+- Connect WhatsApp Business, Instagram, Facebook (using OAuth; credentials aren't stored).
+### Step 2 — Configure the System
+- Set AI tone, team roles, automated workflows via dashboard.
+### Step 3 — Start Messaging
+- After connection, the unified inbox becomes available.
+- The homepage advertises “Start Free Today” with no credit card required, a 14-day free trial, and cancel anytime.
+
+## Pricing Overview
+| Plan | Price | Accounts | Messages |
+| --- | --- | --- | --- |
+| Starter | $0/month | Up to 3 | 1,000/month |
+| Professional | $20/month | Up to 10 | 10,000/month |
+| Enterprise | Custom | Unlimited | Unlimited |
+
+### Plan Details:
+- **Starter — Free:**
+  - Up to 3 accounts,
+  - 1,000 messages/month,
+  - Basic message templates,
+  - Email support,	extbf{ Basic analytics}.
+- **Professional — $20/month:**
+  - Up to 10 accounts,	extbf{ Advanced templates}, Priority support,	extbf{ Advanced analytics}, Custom integrations,	extbf{ Team collaboration}.
+to be continued...
+
+## Scope
+The assistant should answer questions only from the information available in this file.
+If information is not present, the assistant should clearly say it does not have that detail yet.
+
+## Contact
+For unresolved questions, users can be guided to RelayN support contact channels (to be filled by the team).
+
 
 ## Common questions
 

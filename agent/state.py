@@ -13,6 +13,7 @@ class AgentState(TypedDict, total=False):
 
     # --- DEMO FLOW ---
     demo_step: int           # 0 = inactive; 1..len(DEMO_QUESTIONS) = awaiting that answer
+    # Always contains all six demo slots; missing values are None.
     demo_data: dict
     demo_completed: bool
 

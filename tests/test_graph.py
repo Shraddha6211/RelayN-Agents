@@ -52,6 +52,39 @@ def test_demo_flow_persists_step_across_invocations(monkeypatch):
     assert s3["intent"] == "STOP_DEMO"
 
 
+def test_sales_flow_persists_automated_slots_across_invocations(monkeypatch):
+    import agent.graph as graph_mod
+    import agent.nodes as nodes
+
+    async def extract(message, _data):
+        if "Acme" in message:
+            return {"need": "rollout", "company": "Acme"}
+        return {"contact_info": message}
+
+    monkeypatch.setattr(nodes, "_extract_sales_slots", extract)
+
+    app = graph_mod.build_workflow().compile(checkpointer=MemorySaver())
+    cfg = {"configurable": {"thread_id": "sales-t1"}}
+
+    s1 = asyncio.run(app.ainvoke(
+        {"messages": [HumanMessage(content="contact sales")],
+         "user_data": {"user_name": "Sam"}}, cfg))
+    assert s1["sales_step"] == 1
+    assert "*1/3*" in s1["messages"][-1].content
+
+    s2 = asyncio.run(app.ainvoke(
+        {"messages": [HumanMessage(content="We need a rollout for Acme")]}, cfg))
+    assert s2["sales_data"]["need"] == "rollout"
+    assert s2["sales_data"]["company"] == "Acme"
+    assert s2["sales_step"] == 3
+
+    s3 = asyncio.run(app.ainvoke(
+        {"messages": [HumanMessage(content="sam@acme.com")]}, cfg))
+    assert s3["sales_completed"] is True
+    assert s3["sales_step"] == 0
+    assert "[SALES_REQUEST]" in s3["messages"][-1].content
+
+
 def test_handoff_path_runs():
     import agent.graph as graph_mod
     from agent.prompts import HANDOFF_MESSAGE

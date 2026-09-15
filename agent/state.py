@@ -19,5 +19,6 @@ class AgentState(TypedDict, total=False):
 
     # --- SALES FLOW ---
     sales_step: int
+    # Always contains need, company, and contact_info; missing values are None.
     sales_data: dict
     sales_completed: bool

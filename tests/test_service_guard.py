@@ -101,6 +101,24 @@ def test_demo_completion_produces_capture_and_strips_sentinel(monkeypatch):
     assert out.capture.data == {"business_name": "Acme"}
 
 
+def test_sales_completion_produces_capture_and_strips_sentinel(monkeypatch):
+    import service
+    from langchain_core.messages import SystemMessage
+
+    _patch_workflow(monkeypatch, {"organization_id": "org-relayn-test",
+                                  "is_active": True, "workflow_type": "ai_chatbot"})
+    sales_data = {"need": "rollout", "company": "Acme, 40 people", "contact_info": "sam@acme.com"}
+    final = {"messages": [SystemMessage(content="Thanks! [SALES_REQUEST]")],
+             "intent": "CONTACT_SALES", "sales_data": sales_data}
+    out = asyncio.run(service.generate_reply(_payload(), _SpyApp(final)))
+
+    assert "[SALES_REQUEST]" not in out.reply
+    assert out.reply == "Thanks!"
+    assert out.intent == "ORDER"
+    assert out.capture.type == "sales"
+    assert out.capture.data == sales_data
+
+
 def test_handoff_intent_sets_flag(monkeypatch):
     import service
     from langchain_core.messages import SystemMessage

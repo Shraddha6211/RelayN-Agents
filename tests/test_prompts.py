@@ -24,6 +24,15 @@ def test_demo_extraction_prompt_requires_all_slots():
     assert "Return null" in DEMO_EXTRACTION_SYSTEM_PROMPT
 
 
+def test_sales_extraction_prompt_requires_all_slots():
+    from agent.prompts import SALES_EXTRACTION_SYSTEM_PROMPT
+
+    for key in ("need", "company", "contact_info"):
+        assert key in SALES_EXTRACTION_SYSTEM_PROMPT
+    assert "several fields at once" in SALES_EXTRACTION_SYSTEM_PROMPT
+    assert "Return null" in SALES_EXTRACTION_SYSTEM_PROMPT
+
+
 def test_sales_questions_shape():
     from agent.prompts import SALES_QUESTIONS
 

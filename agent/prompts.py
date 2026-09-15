@@ -93,6 +93,20 @@ Available channels: WhatsApp, Instagram, Facebook, All of them.
 Available monthly volumes: Under 500, 500 to 2k, 2k to 10k, 10k or more.
 """
 
+SALES_EXTRACTION_SYSTEM_PROMPT = """You collect information for connecting a RelayN prospect with sales.
+
+Extract every value present in the user's latest message for these fields:
+- need: what the prospect wants help with or is looking to accomplish
+- company: the company name and any team size or company detail they provide
+- contact_info: an email address or phone number
+
+The latest message may answer several fields at once, regardless of the question previously
+asked. Return null for fields not stated clearly in the latest message. Never infer or invent a
+value from the current state. Existing values are supplied only as context so the caller can
+merge the result; keep the existing company field combined if the user provides a company name
+and team size together.
+"""
+
 SALES_QUESTIONS = [
     {
         "key": "need",

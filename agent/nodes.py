@@ -14,6 +14,7 @@ from agent.prompts import (
     HANDOFF_MESSAGE,
     RELAYN_BUSINESS,
     RELAYN_CONTACT,
+    SALES_EXTRACTION_SYSTEM_PROMPT,
     SALES_QUESTIONS,
     format_question,
     render,
@@ -48,13 +49,26 @@ class DemoSlotExtraction(BaseModel):
     preferred_time: Optional[str] = Field(default=None)
 
 
+class SalesSlotExtraction(BaseModel):
+    need: Optional[str] = Field(default=None)
+    company: Optional[str] = Field(default=None)
+    contact_info: Optional[str] = Field(default=None)
+
+
 demo_extractor = ChatOpenAI(
     model="gpt-4.1-mini",
     temperature=0,
     openai_api_key=settings.OPENAI_API_KEY,
 ).with_structured_output(DemoSlotExtraction)
 
+sales_extractor = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0,
+    openai_api_key=settings.OPENAI_API_KEY,
+).with_structured_output(SalesSlotExtraction)
+
 _DEMO_KEYS = tuple(q["key"] for q in DEMO_QUESTIONS)
+_SALES_KEYS = tuple(q["key"] for q in SALES_QUESTIONS)
 
 
 async def _extract_demo_slots(user_msg: str, current_data: dict) -> dict:
@@ -98,6 +112,32 @@ def _merge_demo_slots(data: dict, extracted: dict) -> dict:
         value = _canonical_demo_value(key, extracted.get(key))
         if value is not None:
             merged[key] = value
+    return merged
+
+
+async def _extract_sales_slots(user_msg: str, current_data: dict) -> dict:
+    context = json.dumps(
+        {key: current_data.get(key) for key in _SALES_KEYS},
+        ensure_ascii=True,
+    )
+    result = await sales_extractor.ainvoke([
+        SystemMessage(content=SALES_EXTRACTION_SYSTEM_PROMPT),
+        HumanMessage(content=f"CURRENT STATE:\n{context}\n\nUSER MESSAGE:\n{user_msg}"),
+    ])
+    values = result.model_dump() if isinstance(result, SalesSlotExtraction) else dict(result)
+    return {key: values.get(key) for key in _SALES_KEYS}
+
+
+def _empty_sales_data(data: dict) -> dict:
+    return {key: data.get(key) for key in _SALES_KEYS}
+
+
+def _merge_sales_slots(data: dict, extracted: dict) -> dict:
+    merged = _empty_sales_data(data)
+    for key in _SALES_KEYS:
+        value = extracted.get(key)
+        if value is not None and str(value).strip():
+            merged[key] = str(value).strip()
     return merged
 
 
@@ -184,7 +224,7 @@ async def demo_end_node(state: AgentState) -> dict:
 
 async def sales_node(state: AgentState) -> dict:
     step = state.get("sales_step", 0)
-    data = dict(state.get("sales_data") or {})
+    data = _empty_sales_data(dict(state.get("sales_data") or {}))
     tool_data = state.get("tool_data")
     user_msg = state["messages"][-1].content.strip()
     total = len(SALES_QUESTIONS)
@@ -194,18 +234,19 @@ async def sales_node(state: AgentState) -> dict:
         return {
             "messages": [SystemMessage(content=format_question(SALES_QUESTIONS[0], 1, total))],
             "sales_step": 1,
-            "sales_data": {},
+            "sales_data": _empty_sales_data({}),
             "sales_completed": False,
             "intent": "CONTACT_SALES",
             "tool_data": None,
         }
 
-    # 2. STORE PREVIOUS ANSWER (all sales questions are open)
+    # 2. EXTRACT AND MERGE EVERY SALES SLOT PRESENT IN THE LATEST MESSAGE
     if step > 0:
-        data[SALES_QUESTIONS[step - 1]["key"]] = user_msg
+        data = _merge_sales_slots(data, await _extract_sales_slots(user_msg, data))
 
-    # 3. COMPLETE
-    if step >= total:
+    # 3. COMPLETE WHEN ALL REQUIRED SALES SLOTS ARE FILLED
+    next_index = next((i for i, q in enumerate(SALES_QUESTIONS) if data[q["key"]] is None), None)
+    if next_index is None:
         msg = (
             f"Thanks — I've passed this to our sales team:\n\n{_wizard_summary(data)}\n\n"
             "Someone will be in touch shortly. [SALES_REQUEST]"
@@ -219,11 +260,11 @@ async def sales_node(state: AgentState) -> dict:
             "tool_data": None,
         }
 
-    # 4. ASK NEXT
-    q = SALES_QUESTIONS[step]
+    # 4. ASK THE FIRST REMAINING SALES QUESTION
+    q = SALES_QUESTIONS[next_index]
     return {
-        "messages": [SystemMessage(content=format_question(q, step + 1, total))],
-        "sales_step": step + 1,
+        "messages": [SystemMessage(content=format_question(q, next_index + 1, total))],
+        "sales_step": next_index + 1,
         "sales_data": data,
         "intent": "CONTACT_SALES",
         "tool_data": None,
@@ -231,7 +272,7 @@ async def sales_node(state: AgentState) -> dict:
 
 
 async def sales_end_node(state: AgentState) -> dict:
-    answered = len(state.get("sales_data") or {})
+    answered = sum(value is not None for value in (state.get("sales_data") or {}).values())
     name = state.get("user_data", {}).get("user_name", "there")
     if answered == 0:
         msg = f"No problem, {name} — cancelled. What else can I help with?"

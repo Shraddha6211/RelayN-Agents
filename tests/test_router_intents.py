@@ -19,6 +19,15 @@ def test_active_demo_lock_holds_plain_message_in_flow():
     assert _run(_state("acme corp", demo_step=1, demo_completed=False))["intent"] == "BOOK_DEMO"
 
 
+def test_demo_cal_booking_phase_remains_locked_in_demo_flow():
+    assert _run(_state(
+        "1",
+        demo_step=0,
+        demo_completed=False,
+        demo_booking_status="selecting",
+    ))["intent"] == "BOOK_DEMO"
+
+
 def test_active_demo_lock_detects_stop_word():
     assert _run(_state("cancel", demo_step=2, demo_completed=False))["intent"] == "STOP_DEMO"
 

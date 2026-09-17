@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # ingest script is self-contained and does not call it; kept for parity.
     RELAYN_SERVICES_URL: str = "http://localhost:8001"
 
+    CAL_API_KEY: str = ""
+    CAL_EVENT_TYPE_ID: int = 0
+    CAL_TIMEZONE: str = "Asia/Kathmandu"
+
     @property
     def REDIS_URL(self) -> str:
         if self.REDIS_PASSWORD:

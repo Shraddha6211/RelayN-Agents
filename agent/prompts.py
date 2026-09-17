@@ -65,12 +65,12 @@ DEMO_QUESTIONS = [
     {
         "key": "contact_info",
         "type": "open",
-        "question": "What's the best email or phone number to reach you on?",
+        "question": "What's the best email address to send the calendar invite to?",
     },
     {
-        "key": "preferred_time",
+        "key": "contact_phone",
         "type": "open",
-        "question": "Any preferred day or time for the demo? (for example, 'Tuesday afternoon')",
+        "question": "And a phone number in case we need to reach you about the demo?",
     },
 ]
 
@@ -81,8 +81,8 @@ Extract every value present in the user's latest message for these fields:
 - channels: channels the business wants to manage; use the listed option title when clear
 - monthly_volume: monthly customer-message volume; use the listed option title when clear
 - contact_name: the person the demo invite should address
-- contact_info: an email address or phone number
-- preferred_time: preferred day or time for the demo
+- contact_info: an email address for the calendar invitation
+- contact_phone: a phone number to reach the contact
 
 The latest message may answer several fields at once, regardless of the question previously
 asked. Return null for fields not stated clearly in the latest message. Never infer or invent a

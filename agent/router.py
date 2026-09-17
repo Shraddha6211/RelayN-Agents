@@ -58,11 +58,12 @@ async def router_node(state: AgentState) -> dict:
 
     demo_step = state.get("demo_step", 0)
     demo_completed = state.get("demo_completed", False)
+    demo_booking_status = state.get("demo_booking_status", "collecting")
     sales_step = state.get("sales_step", 0)
     sales_completed = state.get("sales_completed", False)
 
     # 1. ACTIVE DEMO LOCK
-    if demo_step > 0 and not demo_completed:
+    if (demo_step > 0 or demo_booking_status in {"selecting", "confirming"}) and not demo_completed:
         return {"intent": "STOP_DEMO" if _has_stop_word(raw) else "BOOK_DEMO"}
 
     # 2. ACTIVE SALES LOCK

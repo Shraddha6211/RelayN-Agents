@@ -29,6 +29,11 @@ uvicorn main:app --reload --port 8002
 pytest -q
 ```
 
+Demo booking uses Cal.com after the six demo details are collected. Add
+`CAL_API_KEY`, `CAL_EVENT_TYPE_ID`, and optionally `CAL_TIMEZONE` to `.env`.
+The CLI presents available Cal.com slots, accepts a slot number, asks for
+confirmation, and only reports the demo as booked after Cal.com confirms it.
+
 Or `docker compose up --build` (published on `:8002`).
 
 ## Chat with it from the CLI

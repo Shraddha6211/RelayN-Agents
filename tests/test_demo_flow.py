@@ -21,7 +21,7 @@ def test_start_demo_emits_first_question():
     assert out["intent"] == "BOOK_DEMO"
     assert set(out["demo_data"]) == {
         "business_name", "channels", "monthly_volume",
-        "contact_name", "contact_info", "preferred_time",
+        "contact_name", "contact_info", "contact_phone",
     }
     assert "*1/6*" in out["messages"][0].content
 
@@ -74,18 +74,23 @@ def test_message_can_fill_all_slots_and_complete(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "preferred_time": "Tuesday afternoon",
+        "contact_phone": "+1-555-0100",
     }
 
     async def extract(_message, _data):
         return data
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    async def slots():
+        return ["2026-09-16T04:30:00.000Z"]
+
+    monkeypatch.setattr(nodes, "_load_demo_slots", slots)
     out = _run("demo_node", _state("Everything is above", demo_step=1, demo_data={}))
-    assert out["demo_completed"] is True
+    assert out["demo_completed"] is False
     assert out["demo_step"] == 0
     assert out["demo_data"] == data
-    assert "[DEMO_BOOKED]" in out["messages"][0].content
+    assert out["demo_booking_status"] == "selecting"
+    assert "2026-09-16" in out["messages"][0].content
 
 
 def test_partial_message_fills_multiple_slots_and_asks_first_missing(monkeypatch):
@@ -95,14 +100,14 @@ def test_partial_message_fills_multiple_slots_and_asks_first_missing(monkeypatch
         return {
             "business_name": "Acme",
             "contact_name": "Sam",
-            "preferred_time": "Tuesday afternoon",
+            "contact_phone": "+1-555-0100",
         }
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
-    out = _run("demo_node", _state("Acme, Sam, Tuesday afternoon", demo_step=1, demo_data={}))
+    out = _run("demo_node", _state("Acme, Sam, +1-555-0100", demo_step=1, demo_data={}))
     assert out["demo_data"]["business_name"] == "Acme"
     assert out["demo_data"]["contact_name"] == "Sam"
-    assert out["demo_data"]["preferred_time"] == "Tuesday afternoon"
+    assert out["demo_data"]["contact_phone"] == "+1-555-0100"
     assert out["demo_step"] == 2
     assert "channels" in out["messages"][0].content.lower()
 
@@ -119,11 +124,11 @@ def test_prefilled_later_slots_are_skipped(monkeypatch):
         _state(
             "Acme, sam@acme.com",
             demo_step=1,
-            demo_data={"contact_info": "old@example.com", "preferred_time": "Friday"},
+            demo_data={"contact_info": "old@example.com", "contact_phone": "+1-555-0100"},
         ),
     )
     assert out["demo_data"]["contact_info"] == "sam@acme.com"
-    assert out["demo_data"]["preferred_time"] == "Friday"
+    assert out["demo_data"]["contact_phone"] == "+1-555-0100"
     assert out["demo_step"] == 2
     assert "channels" in out["messages"][0].content.lower()
 
@@ -134,25 +139,66 @@ def test_completion_is_based_on_slots_not_step(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "preferred_time": "Tuesday afternoon",
+        "contact_phone": "+1-555-0100",
     }
 
     async def extract(_message, _data):
         return {}
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    async def slots():
+        return ["2026-09-16T04:30:00.000Z"]
+
+    monkeypatch.setattr(nodes, "_load_demo_slots", slots)
     out = _run("demo_node", _state("No changes", demo_step=2, demo_data=data))
-    assert out["demo_completed"] is True
+    assert out["demo_completed"] is False
     assert out["demo_step"] == 0
     assert out["intent"] == "BOOK_DEMO"
-    assert "[DEMO_BOOKED]" in out["messages"][0].content
+    assert out["demo_booking_status"] == "selecting"
     assert out["demo_data"] == data
+
+
+def test_demo_slot_selection_and_cal_booking_complete(monkeypatch):
+    import agent.nodes as nodes
+
+    data = {
+        "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+        "contact_name": "Sam", "contact_info": "sam@acme.com",
+        "contact_phone": "+1-555-0100",
+    }
+
+    async def create(**kwargs):
+        assert kwargs["email"] == "sam@acme.com"
+        assert kwargs["start_iso"] == "2026-09-16T04:30:00.000Z"
+        return {"uid": "booking-1", "meetingUrl": "https://cal.com/meeting/1"}
+
+    monkeypatch.setattr(nodes, "create_booking", create)
+    selecting = _state(
+        "1",
+        demo_step=0,
+        demo_data=data,
+        demo_booking_status="selecting",
+        demo_available_slots=["2026-09-16T04:30:00.000Z"],
+    )
+    confirming = _run("demo_node", selecting)
+    assert confirming["demo_booking_status"] == "confirming"
+
+    booked = _run("demo_node", _state(
+        "yes",
+        demo_step=0,
+        demo_data=data,
+        demo_booking_status="confirming",
+        demo_available_slots=["2026-09-16T04:30:00.000Z"],
+    ))
+    assert booked["demo_completed"] is True
+    assert booked["demo_data"]["cal_booking_id"] == "booking-1"
+    assert "[DEMO_BOOKED]" in booked["messages"][0].content
 
 
 def test_demo_end_resets_and_reports_count():
     out = _run("demo_end_node", _state("stop", demo_step=3, demo_data={
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": None,
-        "contact_name": None, "contact_info": None, "preferred_time": None,
+        "contact_name": None, "contact_info": None, "contact_phone": None,
     }))
     assert out["demo_step"] == 0
     assert out["demo_data"] == {}

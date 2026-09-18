@@ -2,13 +2,14 @@ import logging
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from agent.graph import build_workflow
 from config import settings
 from db.redis import PruningAsyncRedisSaver, init_semantic_cache
-from schemas import GenerateReplyRequest, GenerateReplyResponse
-from service import generate_reply
+from schemas import GenerateReplyRequest, GenerateReplyResponse, ReplyV1Request, ReplyV1Response
+from service import generate_reply, reply_v1
+from signing import require_gateway_signature
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("relayn_agents")
@@ -65,3 +66,16 @@ async def generate_reply_endpoint(payload: GenerateReplyRequest):
     if app.state.agent_app is None:
         raise HTTPException(status_code=503, detail="Graph initializing")
     return await generate_reply(payload, app.state.agent_app)
+
+
+@app.post("/v1/reply", response_model=ReplyV1Response, dependencies=[Depends(require_gateway_signature)])
+async def reply_v1_endpoint(payload: ReplyV1Request):
+    """Called by relayn_gateway, which signs every request.
+
+    503 rather than an empty reply while the graph is still compiling: the
+    gateway treats it as the agent being unavailable and flags the
+    conversation for a human, instead of answering the customer with silence.
+    """
+    if app.state.agent_app is None:
+        raise HTTPException(status_code=503, detail="Graph initializing")
+    return await reply_v1(payload, app.state.agent_app)

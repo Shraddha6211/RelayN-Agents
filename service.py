@@ -4,7 +4,14 @@ from langchain_core.messages import HumanMessage
 
 from clients import supabase_client
 from config import settings
-from schemas import FlowCapture, GenerateReplyRequest, GenerateReplyResponse
+from schemas import (
+    FlowCapture,
+    GenerateReplyRequest,
+    GenerateReplyResponse,
+    ReplyV1Request,
+    ReplyV1Response,
+    TextMessageOut,
+)
 
 logger = logging.getLogger("relayn_agents")
 
@@ -86,4 +93,61 @@ async def generate_reply(payload: GenerateReplyRequest, agent_app) -> GenerateRe
         topic=final.get("search_query"),
         capture=capture,
         handoff_requested=(internal_intent == "HANDOFF"),
+    )
+
+
+# The channel the gateway names -> the asset_type the request model carries.
+# Nothing in the graph reads it; it exists so one request model serves both
+# callers.
+_ASSET_TYPE_BY_CHANNEL = {
+    "whatsapp": "phone_number",
+    "instagram": "instagram_account",
+    "messenger": "facebook_page",
+    "facebook": "facebook_page",
+}
+
+
+async def reply_v1(payload: ReplyV1Request, agent_app) -> ReplyV1Response:
+    """The relayn_gateway contract for one inbound message.
+
+    The gateway has already verified the caller and the org and resolved the
+    workflow. Its history is accepted and ignored: this service replays the
+    conversation from its own Redis checkpointer, which also holds the demo
+    and sales wizard state that a history list cannot carry.
+
+    capture is this service's own wizard state: the gateway forwards whatever
+    it is given without reading it, and nothing downstream stores it, so it is
+    logged here and kept in Redis with the rest of the flow. handoff_requested
+    travels the same way -- see the note where it is returned.
+    """
+    result = await generate_reply(
+        GenerateReplyRequest(
+            org_id=payload.org_id,
+            asset_id=payload.asset_id,
+            asset_type=_ASSET_TYPE_BY_CHANNEL.get(payload.channel, payload.channel),
+            workflow_id=payload.workflow.id,
+            conversation_id=payload.conversation_id,
+            message=payload.message,
+        ),
+        agent_app,
+    )
+
+    if result.capture or result.handoff_requested:
+        logger.info(
+            "conversation %s: capture=%s handoff=%s (not carried by the gateway contract)",
+            payload.conversation_id,
+            result.capture.type if result.capture else None,
+            result.handoff_requested,
+        )
+
+    # Returned as sent. The gateway passes fields it does not know straight
+    # through to the dashboard, so nothing here needs a gateway change; what
+    # the dashboard does with them is a separate decision.
+    return ReplyV1Response(
+        messages=[TextMessageOut(text=result.reply)] if result.reply else [],
+        intent=result.intent,
+        topic=result.topic,
+        usage=None,
+        capture=result.capture,
+        handoff_requested=result.handoff_requested,
     )

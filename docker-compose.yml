@@ -1,7 +1,40 @@
 services:
   relayn-agents:
     build: .
-    ports:
-      - "8002:8002"          # beside relayn_services (:8001) and a custom-tier (:8000)
+    container_name: agent_relayn
     env_file: .env
     restart: unless-stopped
+    # No published port in the shared deployment: the only caller is
+    # relayn_gateway, which reaches this service over the `relayn` network as
+    # http://agent_relayn:8002 (that URL goes in agent_services.base_url).
+    # Uncomment to reach it from the host while developing.
+    # ports:
+    #   - "8002:8002"
+    depends_on:
+      - redis
+    networks:
+      - relayn
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # The graph's checkpointer: conversation history plus the demo and sales
+  # wizard state. Not shared with any other service.
+  redis:
+    image: redis:7-alpine
+    container_name: agent_relayn_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - relayn_agent_redis:/data
+    networks:
+      - relayn
+
+volumes:
+  relayn_agent_redis:
+
+networks:
+  relayn:
+    external: true

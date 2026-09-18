@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     RELAYN_ORG_ID: str
     RELAYN_WORKFLOW_ID: str
 
+    # Shared with relayn_gateway, which holds the same value in the
+    # AGENT_SECRET_* variable this service is registered under
+    # (agent_services.hmac_secret_env). Empty refuses every /v1 request:
+    # the signature of "" is computable by anyone, so it fails closed.
+    GATEWAY_HMAC_SECRET: str = ""
+
     # Base URL of the shared relayn_services deployment. Optional — the KB
     # ingest script is self-contained and does not call it; kept for parity.
     RELAYN_SERVICES_URL: str = "http://localhost:8001"

@@ -16,3 +16,6 @@ os.environ.setdefault("REDIS_DB", "0")
 os.environ.setdefault("RELAYN_ORG_ID", "org-relayn-test")
 os.environ.setdefault("RELAYN_WORKFLOW_ID", "wf-relayn-test")
 os.environ.setdefault("RELAYN_SERVICES_URL", "http://localhost:8001")
+# The gateway signs with this; tests/test_signing.py shares the value and the
+# vector with relan_services and relayn_gateway.
+os.environ.setdefault("GATEWAY_HMAC_SECRET", "gateway-test-secret")

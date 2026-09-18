@@ -3,7 +3,7 @@ def test_demo_questions_shape():
 
     assert [q["key"] for q in DEMO_QUESTIONS] == [
         "business_name", "channels", "monthly_volume",
-        "contact_name", "contact_info", "preferred_time",
+        "contact_name", "contact_info", "contact_phone",
     ]
     button_steps = [q for q in DEMO_QUESTIONS if q["type"] == "button"]
     assert {q["key"] for q in button_steps} == {"channels", "monthly_volume"}
@@ -17,7 +17,7 @@ def test_demo_extraction_prompt_requires_all_slots():
 
     for key in (
         "business_name", "channels", "monthly_volume",
-        "contact_name", "contact_info", "preferred_time",
+        "contact_name", "contact_info", "contact_phone",
     ):
         assert key in DEMO_EXTRACTION_SYSTEM_PROMPT
     assert "several fields at once" in DEMO_EXTRACTION_SYSTEM_PROMPT

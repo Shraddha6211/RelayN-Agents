@@ -2,6 +2,7 @@
 test2/
 tests/
 eval_results.json
+streamlit_app.py/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

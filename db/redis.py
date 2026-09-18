@@ -20,7 +20,7 @@ _redis_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REDIS_OPS)
 
 def init_semantic_cache():
     from redis import Redis
-    print(f"🧠 Initializing Standard Redis Cache at {settings.REDIS_HOST}")
+    print(f"Initializing Standard Redis Cache at {settings.REDIS_HOST}")
     sync_client = Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
     set_llm_cache(RedisCache(redis_=sync_client))
 

@@ -19,12 +19,11 @@ def test_active_demo_lock_holds_plain_message_in_flow():
     assert _run(_state("acme corp", demo_step=1, demo_completed=False))["intent"] == "BOOK_DEMO"
 
 
-def test_demo_cal_booking_phase_remains_locked_in_demo_flow():
+def test_demo_flow_remains_locked_mid_collection():
     assert _run(_state(
-        "1",
-        demo_step=0,
+        "Acme Corp",
+        demo_step=4,
         demo_completed=False,
-        demo_booking_status="selecting",
     ))["intent"] == "BOOK_DEMO"
 
 

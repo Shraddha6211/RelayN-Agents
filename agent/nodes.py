@@ -23,7 +23,7 @@ from agent.prompts import (
 from agent.state import AgentState
 from agent.tools import search_knowledge_base
 from config import settings
-from calcom_client import CalComError, create_booking, get_available_slots
+from calcom_client import CalComError, build_booking_link
 
 
 # ---------------------------------------------------------------------------
@@ -121,19 +121,6 @@ def _is_email(value: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
 
 
-async def _load_demo_slots() -> list[str]:
-    slots_by_date = await get_available_slots(days_ahead=7)
-    return [start for date in sorted(slots_by_date) for start in slots_by_date[date]][:10]
-
-
-def _format_demo_slots(slots: list[str]) -> str:
-    lines = []
-    for index, start in enumerate(slots, 1):
-        display = start.replace("T", " ").replace(".000Z", " UTC")
-        lines.append(f"{index}. {display}")
-    return "Here are the available demo times:\n" + "\n".join(lines) + "\n\nReply with a number to choose one."
-
-
 async def _extract_sales_slots(user_msg: str, current_data: dict) -> dict:
     context = json.dumps(
         {key: current_data.get(key) for key in _SALES_KEYS},
@@ -170,81 +157,6 @@ async def demo_node(state: AgentState) -> dict:
     tool_data = state.get("tool_data")
     user_msg = state["messages"][-1].content.strip()
     total = len(DEMO_QUESTIONS)
-    booking_status = state.get("demo_booking_status", "collecting")
-
-    if booking_status == "selecting":
-        slots = state.get("demo_available_slots") or []
-        if not user_msg.isdigit() or not 1 <= int(user_msg) <= len(slots):
-            return {
-                "messages": [SystemMessage(content=f"Please reply with a number from 1 to {len(slots)}.\n\n{_format_demo_slots(slots)}")],
-                "demo_step": 0,
-                "demo_data": data,
-                "demo_booking_status": "selecting",
-                "demo_available_slots": slots,
-                "demo_completed": False,
-                "intent": "BOOK_DEMO",
-                "tool_data": None,
-            }
-        chosen = slots[int(user_msg) - 1]
-        return {
-            "messages": [SystemMessage(content=f"Confirm the demo booking for {chosen}? Reply yes or no.")],
-            "demo_step": 0,
-            "demo_data": data,
-            "demo_booking_status": "confirming",
-            "demo_available_slots": [chosen],
-            "demo_completed": False,
-            "intent": "BOOK_DEMO",
-            "tool_data": None,
-        }
-
-    if booking_status == "confirming":
-        if user_msg.casefold() not in {"yes", "y", "confirm"}:
-            slots = await _load_demo_slots()
-            return {
-                "messages": [SystemMessage(content=_format_demo_slots(slots))],
-                "demo_step": 0,
-                "demo_data": data,
-                "demo_booking_status": "selecting",
-                "demo_available_slots": slots,
-                "demo_completed": False,
-                "intent": "BOOK_DEMO",
-                "tool_data": None,
-            }
-        try:
-            booking = await create_booking(
-                name=data["contact_name"],
-                email=data["contact_info"],
-                start_iso=(state.get("demo_available_slots") or [None])[0],
-                notes=f"RelayN demo for {data['business_name']} — phone: {data['contact_phone']}",
-            )
-        except (CalComError, KeyError, TypeError) as exc:
-            return {
-                "messages": [SystemMessage(content=f"I couldn't complete that booking ({exc}). Please choose another available time.")],
-                "demo_step": 0,
-                "demo_data": data,
-                "demo_booking_status": "selecting",
-                "demo_available_slots": state.get("demo_available_slots") or [],
-                "demo_completed": False,
-                "intent": "BOOK_DEMO",
-                "tool_data": None,
-            }
-        booking_data = dict(data)
-        booking_data["cal_booking_id"] = booking.get("uid") or booking.get("id")
-        booking_data["cal_meeting_url"] = booking.get("meetingUrl") or booking.get("location")
-        msg = (
-            f"You're booked! A calendar invitation will be sent to {data['contact_info']}. "
-            f"{booking_data['cal_meeting_url'] or ''} [DEMO_BOOKED]"
-        ).strip()
-        return {
-            "messages": [SystemMessage(content=msg)],
-            "demo_step": 0,
-            "demo_data": booking_data,
-            "demo_booking_status": "booked",
-            "demo_available_slots": [],
-            "demo_completed": True,
-            "intent": "BOOK_DEMO",
-            "tool_data": None,
-        }
 
     # 1. INIT
     if tool_data == "START_DEMO":
@@ -252,8 +164,6 @@ async def demo_node(state: AgentState) -> dict:
             "messages": [SystemMessage(content=format_question(DEMO_QUESTIONS[0], 1, total))],
             "demo_step": 1,
             "demo_data": _empty_demo_data({}),
-            "demo_booking_status": "collecting",
-            "demo_available_slots": [],
             "demo_completed": False,
             "intent": "BOOK_DEMO",
             "tool_data": None,
@@ -271,50 +181,35 @@ async def demo_node(state: AgentState) -> dict:
                 "messages": [SystemMessage(content="Cal.com needs an email address for the calendar invitation. What email should I use?")],
                 "demo_step": 0,
                 "demo_data": data,
-                "demo_booking_status": "collecting",
-                "demo_available_slots": [],
                 "demo_completed": False,
                 "intent": "BOOK_DEMO",
                 "tool_data": None,
             }
+        notes = (
+            f"Business: {data['business_name']} | Channels: {data['channels']} | "
+            f"Size: {data['monthly_volume']} | Phone: {data['contact_phone']}"
+        )
         try:
-            slots = await _load_demo_slots()
+            link = build_booking_link(name=data["contact_name"], email=data["contact_info"], notes=notes)
         except CalComError:
             return {
                 "messages": [SystemMessage(content="I couldn't reach the scheduling system right now. Please try again in a moment.")],
                 "demo_step": 0,
                 "demo_data": data,
-                "demo_booking_status": "collecting",
-                "demo_available_slots": [],
                 "demo_completed": False,
                 "intent": "BOOK_DEMO",
                 "tool_data": None,
             }
-        if not slots:
-            return {
-                "messages": [SystemMessage(content="There are no open demo times in the next week. Please try again later.")],
-                "demo_step": 0,
-                "demo_data": data,
-                "demo_booking_status": "collecting",
-                "demo_available_slots": [],
-                "demo_completed": False,
-                "intent": "BOOK_DEMO",
-                "tool_data": None,
-            }
-        return {
-            "messages": [SystemMessage(content=_format_demo_slots(slots))],
-            "demo_step": 0,
-            "demo_data": data,
-            "demo_booking_status": "selecting",
-            "demo_available_slots": slots,
-            "demo_completed": False,
-            "intent": "BOOK_DEMO",
-            "tool_data": None,
-        }
+        booking_data = dict(data)
+        booking_data["cal_booking_link"] = link
+        msg = (
+            f"Almost there! Pick a time that works for you here: {link}\n\n"
+            "Your details are already filled in. [DEMO_BOOKED]"
+        )
         return {
             "messages": [SystemMessage(content=msg)],
             "demo_step": 0,
-            "demo_data": data,
+            "demo_data": booking_data,
             "demo_completed": True,
             "intent": "BOOK_DEMO",
             "tool_data": None,

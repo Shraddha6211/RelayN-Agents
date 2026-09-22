@@ -58,12 +58,11 @@ def _status_lines(state: dict) -> list[str]:
     lines = [f"**Intent:** {state.get('intent') or '—'}"]
     if state.get("demo_step"):
         lines.append(f"**Demo step:** {state['demo_step']}/6")
-    if state.get("demo_booking_status"):
-        lines.append(f"**Booking status:** {state['demo_booking_status']}")
-    if state.get("demo_available_slots"):
-        lines.append(f"**Slots offered:** {len(state['demo_available_slots'])}")
+    cal_link = (state.get("demo_data") or {}).get("cal_booking_link")
+    if cal_link:
+        lines.append(f"**Booking link:** {cal_link}")
     if state.get("demo_completed"):
-        lines.append("✅ **Demo booked**")
+        lines.append("✅ **Demo link sent**")
     if state.get("sales_step"):
         lines.append(f"**Sales step:** {state['sales_step']}/3")
     if state.get("sales_completed"):

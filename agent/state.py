@@ -16,8 +16,6 @@ class AgentState(TypedDict, total=False):
     # Always contains all six demo slots; missing values are None.
     demo_data: dict
     demo_completed: bool
-    demo_booking_status: str
-    demo_available_slots: list[str]
 
     # --- SALES FLOW ---
     sales_step: int

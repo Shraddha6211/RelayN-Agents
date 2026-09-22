@@ -1,6 +1,7 @@
 """Small Cal.com v2 client used by the demo-booking flow."""
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -67,3 +68,16 @@ async def create_booking(*, name: str, email: str, start_iso: str, notes: str | 
     if response.status_code not in (200, 201):
         raise CalComError(f"booking failed: {response.status_code} {response.text}")
     return response.json().get("data", {})
+
+
+def build_booking_link(*, name: str, email: str, notes: str) -> str:
+    """A Cal.com public booking page URL with attendee details prefilled.
+
+    The user picks their own date/time on Cal.com's page — no slots API call,
+    no booking-creation API call. Requires CAL_BOOKING_URL (the event type's
+    public https://cal.com/{username}/{event-slug} page) to be configured.
+    """
+    if not settings.CAL_BOOKING_URL:
+        raise CalComError("Cal.com booking link is not configured")
+    query = urlencode({"name": name, "email": email, "notes": notes})
+    return f"{settings.CAL_BOOKING_URL}?{query}"

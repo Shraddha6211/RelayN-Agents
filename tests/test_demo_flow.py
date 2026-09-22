@@ -68,7 +68,7 @@ def test_button_step_accepts_option_id_and_stores_title(monkeypatch):
     assert out["demo_step"] == 3
 
 
-def test_message_can_fill_all_slots_and_complete(monkeypatch):
+def test_message_can_fill_all_slots_and_sends_booking_link(monkeypatch):
     import agent.nodes as nodes
 
     data = {
@@ -81,16 +81,14 @@ def test_message_can_fill_all_slots_and_complete(monkeypatch):
         return data
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
-    async def slots():
-        return ["2026-09-16T04:30:00.000Z"]
+    monkeypatch.setattr(nodes, "build_booking_link", lambda **kwargs: "https://cal.com/relayn/demo?name=Sam")
 
-    monkeypatch.setattr(nodes, "_load_demo_slots", slots)
     out = _run("demo_node", _state("Everything is above", demo_step=1, demo_data={}))
-    assert out["demo_completed"] is False
+    assert out["demo_completed"] is True
     assert out["demo_step"] == 0
-    assert out["demo_data"] == data
-    assert out["demo_booking_status"] == "selecting"
-    assert "2026-09-16" in out["messages"][0].content
+    assert out["demo_data"]["cal_booking_link"] == "https://cal.com/relayn/demo?name=Sam"
+    assert "https://cal.com/relayn/demo?name=Sam" in out["messages"][0].content
+    assert "[DEMO_BOOKED]" in out["messages"][0].content
 
 
 def test_partial_message_fills_multiple_slots_and_asks_first_missing(monkeypatch):
@@ -133,7 +131,7 @@ def test_prefilled_later_slots_are_skipped(monkeypatch):
     assert "channels" in out["messages"][0].content.lower()
 
 
-def test_completion_is_based_on_slots_not_step(monkeypatch):
+def test_completion_is_based_on_data_not_step(monkeypatch):
     import agent.nodes as nodes
 
     data = {
@@ -146,19 +144,16 @@ def test_completion_is_based_on_slots_not_step(monkeypatch):
         return {}
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
-    async def slots():
-        return ["2026-09-16T04:30:00.000Z"]
+    monkeypatch.setattr(nodes, "build_booking_link", lambda **kwargs: "https://cal.com/relayn/demo?name=Sam")
 
-    monkeypatch.setattr(nodes, "_load_demo_slots", slots)
     out = _run("demo_node", _state("No changes", demo_step=2, demo_data=data))
-    assert out["demo_completed"] is False
+    assert out["demo_completed"] is True
     assert out["demo_step"] == 0
     assert out["intent"] == "BOOK_DEMO"
-    assert out["demo_booking_status"] == "selecting"
-    assert out["demo_data"] == data
+    assert out["demo_data"]["cal_booking_link"] == "https://cal.com/relayn/demo?name=Sam"
 
 
-def test_demo_slot_selection_and_cal_booking_complete(monkeypatch):
+def test_booking_link_includes_notes_with_business_details(monkeypatch):
     import agent.nodes as nodes
 
     data = {
@@ -167,32 +162,49 @@ def test_demo_slot_selection_and_cal_booking_complete(monkeypatch):
         "contact_phone": "+1-555-0100",
     }
 
-    async def create(**kwargs):
-        assert kwargs["email"] == "sam@acme.com"
-        assert kwargs["start_iso"] == "2026-09-16T04:30:00.000Z"
-        return {"uid": "booking-1", "meetingUrl": "https://cal.com/meeting/1"}
+    async def extract(_message, _data):
+        return {}
 
-    monkeypatch.setattr(nodes, "create_booking", create)
-    selecting = _state(
-        "1",
-        demo_step=0,
-        demo_data=data,
-        demo_booking_status="selecting",
-        demo_available_slots=["2026-09-16T04:30:00.000Z"],
-    )
-    confirming = _run("demo_node", selecting)
-    assert confirming["demo_booking_status"] == "confirming"
+    captured = {}
 
-    booked = _run("demo_node", _state(
-        "yes",
-        demo_step=0,
-        demo_data=data,
-        demo_booking_status="confirming",
-        demo_available_slots=["2026-09-16T04:30:00.000Z"],
-    ))
-    assert booked["demo_completed"] is True
-    assert booked["demo_data"]["cal_booking_id"] == "booking-1"
-    assert "[DEMO_BOOKED]" in booked["messages"][0].content
+    def fake_build_link(**kwargs):
+        captured.update(kwargs)
+        return "https://cal.com/relayn/demo?name=Sam"
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    monkeypatch.setattr(nodes, "build_booking_link", fake_build_link)
+
+    _run("demo_node", _state("No changes", demo_step=2, demo_data=data))
+    assert captured["name"] == "Sam"
+    assert captured["email"] == "sam@acme.com"
+    assert "Acme" in captured["notes"]
+    assert "WhatsApp" in captured["notes"]
+    assert "500 to 2k" in captured["notes"]
+    assert "+1-555-0100" in captured["notes"]
+
+
+def test_unconfigured_booking_link_shows_retry_message(monkeypatch):
+    import agent.nodes as nodes
+    from calcom_client import CalComError
+
+    data = {
+        "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+        "contact_name": "Sam", "contact_info": "sam@acme.com",
+        "contact_phone": "+1-555-0100",
+    }
+
+    async def extract(_message, _data):
+        return {}
+
+    def fake_build_link(**kwargs):
+        raise CalComError("Cal.com booking link is not configured")
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    monkeypatch.setattr(nodes, "build_booking_link", fake_build_link)
+
+    out = _run("demo_node", _state("No changes", demo_step=2, demo_data=data))
+    assert out["demo_completed"] is False
+    assert "try again" in out["messages"][0].content.lower()
 
 
 def test_demo_end_resets_and_reports_count():

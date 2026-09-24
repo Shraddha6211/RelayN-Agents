@@ -49,6 +49,7 @@ class DemoSlotExtraction(BaseModel):
     contact_name: Optional[str] = Field(default=None)
     contact_info: Optional[str] = Field(default=None)
     contact_phone: Optional[str] = Field(default=None)
+    wants_to_cancel: bool = Field(default=False)
 
 
 class SalesSlotExtraction(BaseModel):
@@ -83,7 +84,9 @@ async def _extract_demo_slots(user_msg: str, current_data: dict) -> dict:
         HumanMessage(content=f"CURRENT STATE:\n{context}\n\nUSER MESSAGE:\n{user_msg}"),
     ])
     values = result.model_dump() if isinstance(result, DemoSlotExtraction) else dict(result)
-    return {key: values.get(key) for key in _DEMO_KEYS}
+    out = {key: values.get(key) for key in _DEMO_KEYS}
+    out["wants_to_cancel"] = bool(values.get("wants_to_cancel"))
+    return out
 
 
 def _empty_demo_data(data: dict) -> dict:
@@ -108,17 +111,44 @@ def _canonical_demo_value(key: str, value: object) -> str | None:
     return match["title"] if match else None
 
 
-def _merge_demo_slots(data: dict, extracted: dict) -> dict:
-    merged = _empty_demo_data(data)
-    for key in _DEMO_KEYS:
-        value = _canonical_demo_value(key, extracted.get(key))
-        if value is not None:
-            merged[key] = value
-    return merged
-
-
 def _is_email(value: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
+
+
+def _is_valid_mobile(value: str) -> bool:
+    digits = re.sub(r"[\s-]", "", value)
+    return bool(re.fullmatch(r"9\d{9}", digits))
+
+
+# Landline/telephone formats vary too much to validate reliably, so we only
+# accept and check mobile numbers — the re-ask message steers the user there.
+_VALIDATORS: dict[str, tuple] = {
+    "contact_info": (
+        _is_email,
+        "That doesn't look like a valid email address — what's the correct one?",
+    ),
+    "contact_phone": (
+        _is_valid_mobile,
+        "Mobile numbers need to start with 9 and have exactly 10 digits — "
+        "what's your mobile number?",
+    ),
+}
+
+
+def _merge_demo_slots(data: dict, extracted: dict) -> tuple[dict, str | None]:
+    merged = _empty_demo_data(data)
+    validation_error = None
+    for key in _DEMO_KEYS:
+        value = _canonical_demo_value(key, extracted.get(key))
+        if value is None:
+            continue
+        validator = _VALIDATORS.get(key)
+        if validator and not validator[0](value):
+            if validation_error is None:
+                validation_error = validator[1]
+            continue
+        merged[key] = value
+    return merged, validation_error
 
 
 async def _extract_sales_slots(user_msg: str, current_data: dict) -> dict:
@@ -151,6 +181,29 @@ def _merge_sales_slots(data: dict, extracted: dict) -> dict:
 # DEMO FLOW
 # ---------------------------------------------------------------------------
 
+def _demo_cancelled_response(state: AgentState, data: dict) -> dict:
+    answered = sum(value is not None for value in data.values())
+    name = state.get("user_data", {}).get("user_name", "there")
+    msg = (
+        f"No problem, {name} — I've cancelled the demo booking. "
+        "What else can I help with?"
+        if answered == 0
+        else (
+            f"Got it, {name} — I've stopped the demo booking. You'd answered "
+            f"{answered} question(s); nothing was saved. Just say 'book demo' "
+            "whenever you want to start again."
+        )
+    )
+    return {
+        "messages": [SystemMessage(content=msg)],
+        "demo_step": 0,
+        "demo_data": {},
+        "demo_completed": False,
+        "intent": "STOP_DEMO",
+        "tool_data": None,
+    }
+
+
 async def demo_node(state: AgentState) -> dict:
     step = state.get("demo_step", 0)
     data = _empty_demo_data(dict(state.get("demo_data") or {}))
@@ -169,22 +222,25 @@ async def demo_node(state: AgentState) -> dict:
             "tool_data": None,
         }
 
-    # 2. EXTRACT AND MERGE EVERY SLOT PRESENT IN THE LATEST MESSAGE
+    # 2. EXTRACT, CHECK FOR CANCEL INTENT, MERGE + VALIDATE EVERY SLOT PRESENT
     if step > 0:
-        data = _merge_demo_slots(data, await _extract_demo_slots(user_msg, data))
-
-    # 3. COMPLETE WHEN ALL REQUIRED SLOTS ARE FILLED
-    next_index = next((i for i, q in enumerate(DEMO_QUESTIONS) if data[q["key"]] is None), None)
-    if next_index is None:
-        if not _is_email(data["contact_info"]):
+        extracted = await _extract_demo_slots(user_msg, data)
+        if extracted.get("wants_to_cancel"):
+            return _demo_cancelled_response(state, data)
+        data, validation_error = _merge_demo_slots(data, extracted)
+        if validation_error:
             return {
-                "messages": [SystemMessage(content="Cal.com needs an email address for the calendar invitation. What email should I use?")],
-                "demo_step": 0,
+                "messages": [SystemMessage(content=validation_error)],
+                "demo_step": step,
                 "demo_data": data,
                 "demo_completed": False,
                 "intent": "BOOK_DEMO",
                 "tool_data": None,
             }
+
+    # 3. COMPLETE WHEN ALL REQUIRED SLOTS ARE FILLED
+    next_index = next((i for i, q in enumerate(DEMO_QUESTIONS) if data[q["key"]] is None), None)
+    if next_index is None:
         notes = (
             f"Business: {data['business_name']} | Channels: {data['channels']} | "
             f"Size: {data['monthly_volume']} | Phone: {data['contact_phone']}"
@@ -227,29 +283,7 @@ async def demo_node(state: AgentState) -> dict:
 
 
 async def demo_end_node(state: AgentState) -> dict:
-    answered = sum(value is not None for value in (state.get("demo_data") or {}).values())
-    name = state.get("user_data", {}).get("user_name", "there")
-    if answered == 0:
-        msg = (
-            f"No problem, {name} — I've cancelled the demo booking. "
-            "What else can I help with?"
-        )
-    else:
-        msg = (
-            f"Got it, {name} — I've stopped the demo booking. You'd answered "
-            f"{answered} question(s); nothing was saved. Just say 'book demo' "
-            "whenever you want to start again."
-        )
-    return {
-        "messages": [SystemMessage(content=msg)],
-        "demo_step": 0,
-        "demo_data": {},
-        "demo_booking_status": "collecting",
-        "demo_available_slots": [],
-        "demo_completed": False,
-        "intent": "STOP_DEMO",
-        "tool_data": None,
-    }
+    return _demo_cancelled_response(state, state.get("demo_data") or {})
 
 
 # ---------------------------------------------------------------------------

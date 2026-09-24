@@ -70,7 +70,7 @@ DEMO_QUESTIONS = [
     {
         "key": "contact_phone",
         "type": "open",
-        "question": "And a phone number in case we need to reach you about the demo?",
+        "question": "And your mobile number (starts with 9, 10 digits) in case we need to reach you about the demo?",
     },
 ]
 
@@ -82,7 +82,16 @@ Extract every value present in the user's latest message for these fields:
 - monthly_volume: monthly customer-message volume; use the listed option title when clear
 - contact_name: the person the demo invite should address
 - contact_info: an email address for the calendar invitation
-- contact_phone: a phone number to reach the contact
+- contact_phone: a phone number to reach the contact — extract exactly what the user typed,
+  do not reformat or validate it, the caller checks the format
+- wants_to_cancel: true if the latest message signals — in any tone, including casual,
+  dismissive, sarcastic, or joking phrasing — that the user does not want to continue this demo
+  booking right now. Judge the intent, not exact keywords: explicit phrases like "never mind",
+  "forget it", "not interested anymore", "cancel this" count, and so do casual brush-offs like
+  "let it be", "leave it", "just kidding", "whatever", "meh", "I'm good", "not now", "nah". If a
+  reasonable person would read the message as the user wanting to drop this and move on, it's
+  true. False only when the message is a genuine attempt to answer the pending question, a real
+  on-topic question, or a neutral remark that doesn't express reluctance to continue.
 
 The latest message may answer several fields at once, regardless of the question previously
 asked. Return null for fields not stated clearly in the latest message. Never infer or invent a

@@ -74,7 +74,7 @@ def test_message_can_fill_all_slots_and_sends_booking_link(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "contact_phone": "+1-555-0100",
+        "contact_phone": "9800000000",
     }
 
     async def extract(_message, _data):
@@ -98,14 +98,14 @@ def test_partial_message_fills_multiple_slots_and_asks_first_missing(monkeypatch
         return {
             "business_name": "Acme",
             "contact_name": "Sam",
-            "contact_phone": "+1-555-0100",
+            "contact_phone": "9800000000",
         }
 
     monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
-    out = _run("demo_node", _state("Acme, Sam, +1-555-0100", demo_step=1, demo_data={}))
+    out = _run("demo_node", _state("Acme, Sam, 9800000000", demo_step=1, demo_data={}))
     assert out["demo_data"]["business_name"] == "Acme"
     assert out["demo_data"]["contact_name"] == "Sam"
-    assert out["demo_data"]["contact_phone"] == "+1-555-0100"
+    assert out["demo_data"]["contact_phone"] == "9800000000"
     assert out["demo_step"] == 2
     assert "channels" in out["messages"][0].content.lower()
 
@@ -122,11 +122,11 @@ def test_prefilled_later_slots_are_skipped(monkeypatch):
         _state(
             "Acme, sam@acme.com",
             demo_step=1,
-            demo_data={"contact_info": "old@example.com", "contact_phone": "+1-555-0100"},
+            demo_data={"contact_info": "old@example.com", "contact_phone": "9800000000"},
         ),
     )
     assert out["demo_data"]["contact_info"] == "sam@acme.com"
-    assert out["demo_data"]["contact_phone"] == "+1-555-0100"
+    assert out["demo_data"]["contact_phone"] == "9800000000"
     assert out["demo_step"] == 2
     assert "channels" in out["messages"][0].content.lower()
 
@@ -137,7 +137,7 @@ def test_completion_is_based_on_data_not_step(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "contact_phone": "+1-555-0100",
+        "contact_phone": "9800000000",
     }
 
     async def extract(_message, _data):
@@ -159,7 +159,7 @@ def test_booking_link_includes_notes_with_business_details(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "contact_phone": "+1-555-0100",
+        "contact_phone": "9800000000",
     }
 
     async def extract(_message, _data):
@@ -180,7 +180,7 @@ def test_booking_link_includes_notes_with_business_details(monkeypatch):
     assert "Acme" in captured["notes"]
     assert "WhatsApp" in captured["notes"]
     assert "500 to 2k" in captured["notes"]
-    assert "+1-555-0100" in captured["notes"]
+    assert "9800000000" in captured["notes"]
 
 
 def test_unconfigured_booking_link_shows_retry_message(monkeypatch):
@@ -190,7 +190,7 @@ def test_unconfigured_booking_link_shows_retry_message(monkeypatch):
     data = {
         "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
         "contact_name": "Sam", "contact_info": "sam@acme.com",
-        "contact_phone": "+1-555-0100",
+        "contact_phone": "9800000000",
     }
 
     async def extract(_message, _data):
@@ -205,6 +205,102 @@ def test_unconfigured_booking_link_shows_retry_message(monkeypatch):
     out = _run("demo_node", _state("No changes", demo_step=2, demo_data=data))
     assert out["demo_completed"] is False
     assert "try again" in out["messages"][0].content.lower()
+
+
+def test_invalid_mobile_number_is_rejected_with_specific_message(monkeypatch):
+    import agent.nodes as nodes
+
+    async def extract(_message, _data):
+        return {"contact_phone": "+1-555-0100"}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    out = _run("demo_node", _state(
+        "+1-555-0100", demo_step=6,
+        demo_data={
+            "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+            "contact_name": "Sam", "contact_info": "sam@acme.com", "contact_phone": None,
+        },
+    ))
+    assert out["demo_data"]["contact_phone"] is None       # rejected, not stored
+    assert out["demo_step"] == 6                            # stays on the same step
+    assert out["demo_completed"] is False
+    assert "start with 9" in out["messages"][0].content.lower()
+
+
+def test_valid_mobile_number_is_accepted(monkeypatch):
+    import agent.nodes as nodes
+
+    async def extract(_message, _data):
+        return {"contact_phone": "9812345678"}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    monkeypatch.setattr(nodes, "build_booking_link", lambda **kwargs: "https://cal.com/relayn/demo")
+
+    out = _run("demo_node", _state(
+        "9812345678", demo_step=6,
+        demo_data={
+            "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+            "contact_name": "Sam", "contact_info": "sam@acme.com", "contact_phone": None,
+        },
+    ))
+    assert out["demo_completed"] is True
+    assert out["demo_data"]["contact_phone"] == "9812345678"
+
+
+def test_invalid_email_is_rejected_with_specific_message(monkeypatch):
+    import agent.nodes as nodes
+
+    async def extract(_message, _data):
+        return {"contact_info": "not-an-email"}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    out = _run("demo_node", _state(
+        "not-an-email", demo_step=5,
+        demo_data={
+            "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+            "contact_name": "Sam", "contact_info": None, "contact_phone": "9800000000",
+        },
+    ))
+    assert out["demo_data"]["contact_info"] is None
+    assert out["demo_step"] == 5
+    assert out["demo_completed"] is False
+    assert "valid email" in out["messages"][0].content.lower()
+
+
+def test_explicit_cancel_intent_mid_flow_clears_data(monkeypatch):
+    import agent.nodes as nodes
+
+    async def extract(_message, _data):
+        return {"wants_to_cancel": True}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    out = _run("demo_node", _state(
+        "actually never mind, forget the whole thing", demo_step=3,
+        demo_data={"business_name": "Acme", "channels": "WhatsApp", "monthly_volume": None,
+                   "contact_name": None, "contact_info": None, "contact_phone": None},
+    ))
+    assert out["demo_completed"] is False
+    assert out["demo_step"] == 0
+    assert out["demo_data"] == {}
+    assert out["intent"] == "STOP_DEMO"
+    assert "2" in out["messages"][0].content
+
+
+def test_nuisance_message_without_cancel_intent_just_re_asks(monkeypatch):
+    import agent.nodes as nodes
+
+    async def extract(_message, _data):
+        return {"wants_to_cancel": False}
+
+    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    out = _run("demo_node", _state(
+        "lol what are you, a robot? tell me a joke", demo_step=1,
+        demo_data={},
+    ))
+    assert out["demo_data"]["business_name"] is None       # nothing stored
+    assert out["demo_step"] == 1                            # same question re-asked
+    assert out["intent"] == "BOOK_DEMO"
+    assert "*1/6*" in out["messages"][0].content
 
 
 def test_demo_end_resets_and_reports_count():

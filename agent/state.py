@@ -12,10 +12,11 @@ class AgentState(TypedDict, total=False):
     tool_data: Any           # retrieved-context string, or a sub-flow marker
 
     # --- DEMO FLOW ---
-    demo_step: int           # 0 = inactive; 1..len(DEMO_QUESTIONS) = awaiting that answer
+    demo_phase: str | None   # None = inactive; "collecting" | "confirming"
     # Always contains all six demo slots; missing values are None.
     demo_data: dict
     demo_completed: bool
+    demo_language: str       # language the user writes in; the composer replies in it
 
     # --- SALES FLOW ---
     sales_step: int

@@ -1,27 +1,39 @@
 def test_demo_questions_shape():
     from agent.prompts import DEMO_QUESTIONS
 
-    assert [q["key"] for q in DEMO_QUESTIONS] == [
-        "business_name", "channels", "monthly_volume",
-        "contact_name", "contact_info", "contact_phone",
+    assert [q["keys"] for q in DEMO_QUESTIONS] == [
+        ["business_name"], ["channels"], ["monthly_volume"],
+        ["contact_name"], ["contact_info", "contact_phone"],
     ]
     button_steps = [q for q in DEMO_QUESTIONS if q["type"] == "button"]
-    assert {q["key"] for q in button_steps} == {"channels", "monthly_volume"}
+    assert {q["keys"][0] for q in button_steps} == {"channels", "monthly_volume"}
     for q in button_steps:
         assert len(q["options"]) >= 2
         assert all("id" in o and "title" in o for o in q["options"])
 
 
-def test_demo_extraction_prompt_requires_all_slots():
-    from agent.prompts import DEMO_EXTRACTION_SYSTEM_PROMPT
+def test_demo_turn_prompt_requires_all_slots_and_reply_intents():
+    from agent.prompts import DEMO_TURN_SYSTEM_PROMPT
 
     for key in (
         "business_name", "channels", "monthly_volume",
         "contact_name", "contact_info", "contact_phone",
+        "reply_intent", "side_question_query", "language",
     ):
-        assert key in DEMO_EXTRACTION_SYSTEM_PROMPT
-    assert "several fields at once" in DEMO_EXTRACTION_SYSTEM_PROMPT
-    assert "Return null" in DEMO_EXTRACTION_SYSTEM_PROMPT
+        assert key in DEMO_TURN_SYSTEM_PROMPT
+    for intent in ("ANSWER", "CONFIRM", "DENY", "QUESTION", "SKIP", "OTHER"):
+        assert intent in DEMO_TURN_SYSTEM_PROMPT
+    assert "several fields at once" in DEMO_TURN_SYSTEM_PROMPT
+    assert "Return null" in DEMO_TURN_SYSTEM_PROMPT
+
+
+def test_demo_question_text_lists_options_after_question():
+    from agent.prompts import DEMO_QUESTIONS, demo_question_text
+
+    text = demo_question_text(DEMO_QUESTIONS[1])
+    assert text.startswith(DEMO_QUESTIONS[1]["question"])
+    for opt in DEMO_QUESTIONS[1]["options"]:
+        assert opt["title"] in text
 
 
 def test_sales_extraction_prompt_requires_all_slots():
@@ -54,16 +66,10 @@ def test_render_survives_braces_in_values():
     assert '{"price": "NPR 5,000"}' in out
 
 
-def test_format_question_open_and_button():
-    from agent.prompts import DEMO_QUESTIONS, format_question
+def test_format_question_open():
+    from agent.prompts import SALES_QUESTIONS, format_question
 
-    open_q = format_question(DEMO_QUESTIONS[0], 1, 6)
-    assert open_q.startswith("*1/6*")
-
-    button_q = format_question(DEMO_QUESTIONS[1], 2, 6)
-    assert "*2/6*" in button_q
-    for opt in DEMO_QUESTIONS[1]["options"]:
-        assert f"{opt['id']}) {opt['title']}" in button_q
+    assert format_question(SALES_QUESTIONS[0], 1, 3).startswith("*1/3*")
 
 
 def test_generator_prompt_has_expected_slots():

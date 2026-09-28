@@ -7,7 +7,7 @@
 
 Drives the compiled LangGraph directly (same path as tests/test_graph.py), so
 the router and generator make real OpenAI calls and PRODUCT_QA / PRICING hit
-Supabase's match_workflow_kb_chunks. Wizard state (demo_step, sales_step, ...)
+Supabase's match_workflow_kb_chunks. Wizard state (demo_phase, sales_step, ...)
 persists across turns within the session.
 
 Env resolution for the two scope ids, highest priority first:
@@ -64,8 +64,8 @@ def _status_line(state: dict) -> str:
     bits = [f"intent={state.get('intent') or '—'}"]
     if state.get("search_query"):
         bits.append(f"topic={state['search_query']}")
-    if state.get("demo_step"):
-        bits.append(f"demo_step={state['demo_step']}")
+    if state.get("demo_phase"):
+        bits.append(f"demo_phase={state['demo_phase']}")
     if state.get("demo_completed"):
         bits.append("demo_completed")
     if state.get("sales_step"):

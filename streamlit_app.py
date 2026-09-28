@@ -56,8 +56,8 @@ async def _run_turn(user_msg: str, thread_id: str) -> dict:
 
 def _status_lines(state: dict) -> list[str]:
     lines = [f"**Intent:** {state.get('intent') or '—'}"]
-    if state.get("demo_step"):
-        lines.append(f"**Demo step:** {state['demo_step']}/6")
+    if state.get("demo_phase"):
+        lines.append(f"**Demo:** {state['demo_phase']}")
     cal_link = (state.get("demo_data") or {}).get("cal_booking_link")
     if cal_link:
         lines.append(f"**Booking link:** {cal_link}")

@@ -26,19 +26,22 @@ HANDOFF_MESSAGE = (
 )
 
 # --------------------------------------------------------------------------
-# SUB-FLOW QUESTION BANKS (deterministic wizards — no LLM)
+# DEMO BOOKING: QUESTIONS AND MESSAGE TEMPLATES
+# The English templates fix WHAT each message says; the composer LLM
+# (DEMO_COMPOSER_SYSTEM_PROMPT) rewrites HOW it is said, in the user's language.
 # --------------------------------------------------------------------------
 
+# All asked at once. Each entry fills one or more demo_data slots.
 DEMO_QUESTIONS = [
     {
-        "key": "business_name",
+        "keys": ["business_name"],
         "type": "open",
-        "question": "Happy to set that up. First — what's the name of your business?",
+        "question": "What's the name of your business?",
     },
     {
-        "key": "channels",
+        "keys": ["channels"],
         "type": "button",
-        "question": "Which channels do you want to manage with RelayN?",
+        "question": "Which channel would you most like to manage with RelayN?",
         "options": [
             {"id": "ch_wa", "title": "WhatsApp"},
             {"id": "ch_ig", "title": "Instagram"},
@@ -47,9 +50,9 @@ DEMO_QUESTIONS = [
         ],
     },
     {
-        "key": "monthly_volume",
+        "keys": ["monthly_volume"],
         "type": "button",
-        "question": "Roughly how many customer messages do you handle a month?",
+        "question": "Roughly how many customer messages does your business handle in a month?",
         "options": [
             {"id": "vol_s", "title": "Under 500"},
             {"id": "vol_m", "title": "500 to 2k"},
@@ -58,49 +61,128 @@ DEMO_QUESTIONS = [
         ],
     },
     {
-        "key": "contact_name",
+        "keys": ["contact_name"],
         "type": "open",
-        "question": "Who should we address the demo invite to?",
+        "question": "Who should we address the demo invitation to?",
     },
     {
-        "key": "contact_info",
+        "keys": ["contact_info", "contact_phone"],
         "type": "open",
-        "question": "What's the best email address to send the calendar invite to?",
-    },
-    {
-        "key": "contact_phone",
-        "type": "open",
-        "question": "And your mobile number (starts with 9, 10 digits) in case we need to reach you about the demo?",
+        "question": (
+            "What's the best email address for the calendar invite, and a mobile number "
+            "(10 digits, starting with 9) we can reach you on?"
+        ),
     },
 ]
 
-DEMO_EXTRACTION_SYSTEM_PROMPT = """You collect information for scheduling a RelayN product demo.
+# Asked instead of the combined question when only one half of it is missing.
+DEMO_PARTIAL_QUESTIONS = {
+    "contact_info": "What's the best email address for the calendar invite?",
+    "contact_phone": "What mobile number (10 digits, starting with 9) can we reach you on?",
+}
 
-Extract every value present in the user's latest message for these fields:
+DEMO_SLOT_LABELS = {
+    "business_name": "Business name",
+    "channels": "Channel",
+    "monthly_volume": "Monthly messages",
+    "contact_name": "Invite addressed to",
+    "contact_info": "Email",
+    "contact_phone": "Mobile number",
+}
+
+DEMO_INTRO = (
+    "Great{{NAME}}! Before I book a demo appointment for you, please answer the following "
+    "questions — it will help our team provide you with a tailored demo experience."
+)
+DEMO_PREFILLED_NOTE = "From our chat I've already noted:"
+DEMO_MISSING = (
+    "Thanks for the information. Could you please answer the following so that I could "
+    "book an appointment?"
+)
+DEMO_FIX_LEAD = (
+    "Could you please check and answer the following so that I could book an appointment?"
+)
+DEMO_REASK ="Sure! To book your demo appointment, I just need the following from you:"
+DEMO_CONFIRM_LEAD = "Thank you! Here's what I have — please check that everything is correct:"
+DEMO_CONFIRM_ASK = "Is everything correct? Reply *yes* to book, or tell me what to change."
+DEMO_SKIP = (
+    "No worries{{NAME}}, we can book a demo later. How may I help you with RelayN today?"
+)
+DEMO_CONTINUE_COLLECTING = (
+    "Should we continue to schedule a demo appointment with the RelayN team?"
+)
+DEMO_CONTINUE_CONFIRMING = "Shall I go ahead and book the demo with the details above?"
+DEMO_WHICH_FIX = "No problem — which detail should I change?"
+DEMO_BOOKING_ERROR = (
+    "I couldn't reach the scheduling system right now. Please reply *yes* in a moment "
+    "and I'll try again — your details are saved."
+)
+DEMO_BOOKED = (
+    "Almost there! Pick a time that works for you here: {{LINK}}\n\n"
+    "Your details are already filled in."
+)
+DEMO_SIDE_ANSWER_INSTRUCTION = (
+    "The user is in the middle of booking a RelayN demo and asked this on the side. "
+    "Answer it, but do not offer or mention a demo — a follow-up is appended for you."
+)
+
+DEMO_TURN_SYSTEM_PROMPT = """You read one user message sent while a RelayN product demo is being
+booked, extract any demo details it contains, and classify what the user is doing.
+
+Extract every value present in the user's message for these fields:
 - business_name: the business or company name
-- channels: channels the business wants to manage; use the listed option title when clear
+- channels: the channel the business wants to manage; use the listed option title when clear
 - monthly_volume: monthly customer-message volume; use the listed option title when clear
+  (e.g. "about 300" -> "Under 500")
 - contact_name: the person the demo invite should address
-- contact_info: an email address for the calendar invitation
+- contact_info: an email address for the calendar invitation — extract exactly what was typed
 - contact_phone: a phone number to reach the contact — extract exactly what the user typed,
   do not reformat or validate it, the caller checks the format
-- wants_to_cancel: true if the latest message signals — in any tone, including casual,
-  dismissive, sarcastic, or joking phrasing — that the user does not want to continue this demo
-  booking right now. Judge the intent, not exact keywords: explicit phrases like "never mind",
-  "forget it", "not interested anymore", "cancel this" count, and so do casual brush-offs like
-  "let it be", "leave it", "just kidding", "whatever", "meh", "I'm good", "not now", "nah". If a
-  reasonable person would read the message as the user wanting to drop this and move on, it's
-  true. False only when the message is a genuine attempt to answer the pending question, a real
-  on-topic question, or a neutral remark that doesn't express reluctance to continue.
 
-The latest message may answer several fields at once, regardless of the question previously
-asked. Return null for fields not stated clearly in the latest message. Never infer or invent a
-value from the current state. Existing values are supplied only as context so you can recognize
-new information; the caller decides how to merge the result.
+Classify reply_intent as one of:
+- ANSWER   — the message gives (some of) the requested details.
+- CONFIRM  — yes / correct / go ahead / continue / sure, with no request to drop the demo.
+- DENY     — no / that's wrong / not quite. While collecting, a plain "no" to continuing
+             the booking also counts as DENY.
+- QUESTION — the user asks a question about anything (RelayN, pricing, features, or another
+             topic), even if the message also contains answers.
+- SKIP     — the user wants to drop the demo for now, in any tone: "skip", "later",
+             "never mind", "forget it", "not now", "leave it", "nah", "I'm good".
+- OTHER    — anything else.
+
+side_question_query: when reply_intent is QUESTION, 2-4 search keywords for the question
+(include the word "pricing" for cost questions); otherwise null.
+
+language: the language / script the user writes in, e.g. "English", "Nepali (romanized)",
+"Hindi (Devanagari)". Use "English" when unclear.
+
+The message may answer several fields at once, regardless of which question was asked.
+Return null for fields not stated clearly in the message. Never infer or invent a value from the
+current state. Existing values are supplied only as context so you can recognize new
+information or corrections; the caller decides how to merge the result.
 
 Available channels: WhatsApp, Instagram, Facebook, All of them.
 Available monthly volumes: Under 500, 500 to 2k, 2k to 10k, 10k or more.
 """
+
+DEMO_COMPOSER_SYSTEM_PROMPT = """You are on the RelayN team, chatting with a customer on WhatsApp
+while booking a product demo for them. You are given a draft message. Rewrite it so it reads
+warm, polite and natural — friendly, never pushy — in the requested language / script.
+
+Rules:
+- Keep the meaning and every item of the draft. Do not add questions, facts, offers or prices.
+- Keep numbered lists numbered and in the same order, one item per line.
+- Keep option labels (e.g. WhatsApp, Under 500, All of them) exactly as written, in English,
+  so the customer can reply with them.
+- Keep names, business names, email addresses, phone numbers, URLs and other data values
+  exactly as written.
+- Address the customer by name only where the draft already does.
+- Keep WhatsApp formatting (*bold*, line breaks). Return only the rewritten message.
+"""
+
+# --------------------------------------------------------------------------
+# SALES WIZARD (one question at a time)
+# --------------------------------------------------------------------------
 
 SALES_EXTRACTION_SYSTEM_PROMPT = """You collect information for connecting a RelayN prospect with sales.
 
@@ -238,6 +320,18 @@ def render(template: str, **slots: str) -> str:
     for key, value in slots.items():
         out = out.replace("{{" + key.upper() + "}}", (value or "").strip())
     return _LEFTOVER_SLOT.sub("", out)
+
+
+def demo_question_text(q: dict) -> str:
+    """One demo question, followed by its choices when it is a multiple-choice question."""
+    if q["type"] != "button":
+        return q["question"]
+    options = "\n".join(f"   • {o['title']}" for o in q["options"])
+    return f"{q['question']}\n{options}"
+
+
+def numbered(items: list[str]) -> str:
+    return "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
 
 
 def format_question(q: dict, n: int, total: int) -> str:

@@ -16,23 +16,24 @@ def _run(state):
 
 
 def test_active_demo_lock_holds_plain_message_in_flow():
-    assert _run(_state("acme corp", demo_step=1, demo_completed=False))["intent"] == "BOOK_DEMO"
+    assert _run(_state("acme corp", demo_phase="collecting"))["intent"] == "BOOK_DEMO"
 
 
-def test_demo_flow_remains_locked_mid_collection():
-    assert _run(_state(
-        "Acme Corp",
-        demo_step=4,
-        demo_completed=False,
-    ))["intent"] == "BOOK_DEMO"
+def test_demo_flow_remains_locked_while_confirming():
+    assert _run(_state("yes", demo_phase="confirming"))["intent"] == "BOOK_DEMO"
 
 
-def test_active_demo_lock_detects_stop_word():
-    assert _run(_state("cancel", demo_step=2, demo_completed=False))["intent"] == "STOP_DEMO"
+def test_active_demo_lock_detects_whole_message_stop_word():
+    assert _run(_state("Cancel ", demo_phase="collecting"))["intent"] == "STOP_DEMO"
+
+
+def test_stop_word_inside_an_answer_does_not_cancel_demo():
+    # "Back Office Ltd" is a business name, not a request to leave.
+    assert _run(_state("Back Office Ltd", demo_phase="collecting"))["intent"] == "BOOK_DEMO"
 
 
 def test_completed_demo_does_not_lock(monkeypatch):
-    # demo_step 0 -> no lock; a plain greeting falls through to the LLM path.
+    # demo_phase None -> no lock; a plain greeting falls through to the LLM path.
     import agent.router as router
 
     async def fake_ainvoke(_payload):
@@ -41,7 +42,7 @@ def test_completed_demo_does_not_lock(monkeypatch):
     monkeypatch.setattr(router, "structured_router",
                         types.SimpleNamespace(ainvoke=fake_ainvoke))
 
-    out = asyncio.run(router.router_node(_state("hello", demo_step=0, demo_completed=True)))
+    out = asyncio.run(router.router_node(_state("hello", demo_phase=None, demo_completed=True)))
     assert out["intent"] == "GENERAL_CHAT"
 
 

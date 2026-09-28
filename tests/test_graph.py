@@ -18,19 +18,45 @@ def test_route_decision_maps_every_intent():
         assert route_decision({"intent": intent}) == node
 
 
-def test_demo_flow_persists_step_across_invocations(monkeypatch):
-    """Router locks the flow; checkpointer carries demo_step turn to turn.
+_FULL_DEMO = {
+    "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
+    "contact_name": "Sam", "contact_info": "sam@acme.com", "contact_phone": "9800000000",
+}
 
-    No LLM is mocked because no LLM is reached: the keyword fast path starts the
-    flow, then the active-demo lock holds every following turn.
-    """
+
+def _demo_turn(reply_intent, **slots):
+    out = {key: None for key in _FULL_DEMO}
+    out.update(slots)
+    out.update({"reply_intent": reply_intent, "side_question_query": None, "language": "English"})
+    return out
+
+
+def _patch_demo_llms(monkeypatch, turns):
+    import agent.nodes as nodes
+
+    async def extract(message, _data, _phase):
+        return turns[message]
+
+    async def compose(text, *_args, **_kwargs):
+        return text
+
+    monkeypatch.setattr(nodes, "_extract_demo_turn", extract)
+    monkeypatch.setattr(nodes, "_compose", compose)
+
+
+def test_demo_flow_persists_phase_across_invocations(monkeypatch):
+    """Router locks the flow; checkpointer carries demo_phase turn to turn."""
     import agent.graph as graph_mod
     import agent.nodes as nodes
 
-    async def extract(message, _data):
-        return {"business_name": message}
-
-    monkeypatch.setattr(nodes, "_extract_demo_slots", extract)
+    _patch_demo_llms(monkeypatch, {
+        "book demo": _demo_turn("OTHER"),
+        "Acme, WhatsApp": _demo_turn("ANSWER", business_name="Acme", channels="WhatsApp"),
+        "rest": _demo_turn("ANSWER", **{k: v for k, v in _FULL_DEMO.items()
+                                        if k not in ("business_name", "channels")}),
+        "yes": _demo_turn("CONFIRM"),
+    })
+    monkeypatch.setattr(nodes, "build_booking_link", lambda **_kw: "https://cal.com/relayn/demo")
 
     app = graph_mod.build_workflow().compile(checkpointer=MemorySaver())
     cfg = {"configurable": {"thread_id": "t1"}}
@@ -38,18 +64,37 @@ def test_demo_flow_persists_step_across_invocations(monkeypatch):
     s1 = asyncio.run(app.ainvoke(
         {"messages": [HumanMessage(content="book demo")],
          "user_data": {"user_name": "Sam"}}, cfg))
-    assert s1["demo_step"] == 1
-    assert "*1/6*" in s1["messages"][-1].content
+    assert s1["demo_phase"] == "collecting"
+    assert "5. " in s1["messages"][-1].content
 
-    s2 = asyncio.run(app.ainvoke(
-        {"messages": [HumanMessage(content="Acme Corp")]}, cfg))
-    assert s2["demo_data"]["business_name"] == "Acme Corp"
-    assert s2["demo_step"] == 2
+    s2 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="Acme, WhatsApp")]}, cfg))
+    assert s2["demo_data"]["business_name"] == "Acme"
+    assert s2["demo_phase"] == "collecting"
 
-    s3 = asyncio.run(app.ainvoke(
-        {"messages": [HumanMessage(content="cancel")]}, cfg))
-    assert s3["demo_step"] == 0
-    assert s3["intent"] == "STOP_DEMO"
+    s3 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="rest")]}, cfg))
+    assert s3["demo_phase"] == "confirming"
+
+    s4 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="yes")]}, cfg))
+    assert s4["demo_completed"] is True
+    assert s4["demo_phase"] is None
+    assert "[DEMO_BOOKED]" in s4["messages"][-1].content
+
+
+def test_demo_hard_stop_word_resets_flow(monkeypatch):
+    import agent.graph as graph_mod
+
+    _patch_demo_llms(monkeypatch, {"book demo": _demo_turn("OTHER")})
+
+    app = graph_mod.build_workflow().compile(checkpointer=MemorySaver())
+    cfg = {"configurable": {"thread_id": "t-stop"}}
+
+    asyncio.run(app.ainvoke(
+        {"messages": [HumanMessage(content="book demo")],
+         "user_data": {"user_name": "Sam"}}, cfg))
+    s2 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="cancel")]}, cfg))
+    assert s2["demo_phase"] is None
+    assert s2["intent"] == "STOP_DEMO"
+    assert s2["messages"][-1].content.startswith("No worries Sam")
 
 
 def test_sales_flow_persists_automated_slots_across_invocations(monkeypatch):

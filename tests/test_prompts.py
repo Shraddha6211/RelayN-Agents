@@ -1,39 +1,40 @@
-def test_demo_questions_shape():
-    from agent.prompts import DEMO_QUESTIONS
-
-    assert [q["keys"] for q in DEMO_QUESTIONS] == [
-        ["business_name"], ["channels"], ["monthly_volume"],
-        ["contact_name"], ["contact_info", "contact_phone"],
-    ]
-    button_steps = [q for q in DEMO_QUESTIONS if q["type"] == "button"]
-    assert {q["keys"][0] for q in button_steps} == {"channels", "monthly_volume"}
-    for q in button_steps:
-        assert len(q["options"]) >= 2
-        assert all("id" in o and "title" in o for o in q["options"])
-
-
 def test_demo_turn_prompt_requires_all_slots_and_reply_intents():
     from agent.prompts import DEMO_TURN_SYSTEM_PROMPT
 
     for key in (
-        "business_name", "channels", "monthly_volume",
-        "contact_name", "contact_info", "contact_phone",
+        "contact_name", "contact_info",
         "reply_intent", "side_question_query", "language",
     ):
         assert key in DEMO_TURN_SYSTEM_PROMPT
     for intent in ("ANSWER", "CONFIRM", "DENY", "QUESTION", "SKIP", "OTHER"):
         assert intent in DEMO_TURN_SYSTEM_PROMPT
-    assert "several fields at once" in DEMO_TURN_SYSTEM_PROMPT
     assert "Return null" in DEMO_TURN_SYSTEM_PROMPT
 
 
-def test_demo_question_text_lists_options_after_question():
-    from agent.prompts import DEMO_QUESTIONS, demo_question_text
+def test_demo_reply_writer_prompt_keeps_it_conversational():
+    from agent.prompts import DEMO_COMPOSER_SYSTEM_PROMPT
 
-    text = demo_question_text(DEMO_QUESTIONS[1])
-    assert text.startswith(DEMO_QUESTIONS[1]["question"])
-    for opt in DEMO_QUESTIONS[1]["options"]:
-        assert opt["title"] in text
+    assert "RECENT CHAT" in DEMO_COMPOSER_SYSTEM_PROMPT
+    assert "BRIEF" in DEMO_COMPOSER_SYSTEM_PROMPT
+    assert "at most one thing" in DEMO_COMPOSER_SYSTEM_PROMPT
+    assert "No lists" in DEMO_COMPOSER_SYSTEM_PROMPT
+
+
+def test_every_reply_prompt_mirrors_the_users_script():
+    from agent.prompts import DEMO_COMPOSER_SYSTEM_PROMPT, GENERATOR_SYSTEM_PROMPT, MIRROR_SCRIPT_RULE
+
+    assert "Devanagari only if the customer writes in Devanagari" in MIRROR_SCRIPT_RULE
+    assert "romanized Nepali" in MIRROR_SCRIPT_RULE
+    assert MIRROR_SCRIPT_RULE in DEMO_COMPOSER_SYSTEM_PROMPT
+    assert MIRROR_SCRIPT_RULE in GENERATOR_SYSTEM_PROMPT
+
+
+def test_demo_turn_prompt_separates_script_and_allows_unknown():
+    from agent.prompts import DEMO_TURN_SYSTEM_PROMPT
+
+    assert "Nepali (romanized)" in DEMO_TURN_SYSTEM_PROMPT
+    assert "Nepali (Devanagari)" in DEMO_TURN_SYSTEM_PROMPT
+    assert '"unknown"' in DEMO_TURN_SYSTEM_PROMPT
 
 
 def test_sales_extraction_prompt_requires_all_slots():

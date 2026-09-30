@@ -10,34 +10,25 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from agent.prompts import (
+    DEMO_ASK_EMAIL,
+    DEMO_ASK_NAME,
+    DEMO_ASK_NAME_EMAIL,
+    DEMO_BAD_EMAIL,
     DEMO_BOOKED,
     DEMO_BOOKING_ERROR,
     DEMO_COMPOSER_SYSTEM_PROMPT,
-    DEMO_CONFIRM_ASK,
-    DEMO_CONFIRM_LEAD,
-    DEMO_CONTINUE_COLLECTING,
-    DEMO_CONTINUE_CONFIRMING,
-    DEMO_FIX_LEAD,
-    DEMO_INTRO,
-    DEMO_MISSING,
-    DEMO_PARTIAL_QUESTIONS,
-    DEMO_PREFILLED_NOTE,
-    DEMO_QUESTIONS,
-    DEMO_REASK,
+    DEMO_NUDGE,
     DEMO_SIDE_ANSWER_INSTRUCTION,
     DEMO_SKIP,
-    DEMO_SLOT_LABELS,
+    DEMO_START,
     DEMO_TURN_SYSTEM_PROMPT,
-    DEMO_WHICH_FIX,
     GENERATOR_SYSTEM_PROMPT,
     HANDOFF_MESSAGE,
     RELAYN_BUSINESS,
     RELAYN_CONTACT,
     SALES_EXTRACTION_SYSTEM_PROMPT,
     SALES_QUESTIONS,
-    demo_question_text,
     format_question,
-    numbered,
     render,
 )
 from agent.state import AgentState
@@ -52,25 +43,13 @@ logger = logging.getLogger("relayn_agents.nodes")
 # SHARED
 # ---------------------------------------------------------------------------
 
-def _match_button(user_msg: str, options: list[dict]) -> dict | None:
-    probe = user_msg.strip().lower()
-    for o in options:
-        if probe == o["id"].lower() or probe == o["title"].lower():
-            return o
-    return None
-
-
 def _wizard_summary(data: dict) -> str:
     return "\n".join(f"• {k.replace('_', ' ').title()}: {v}" for k, v in data.items())
 
 
 class DemoTurn(BaseModel):
-    business_name: Optional[str] = Field(default=None)
-    channels: Optional[str] = Field(default=None)
-    monthly_volume: Optional[str] = Field(default=None)
     contact_name: Optional[str] = Field(default=None)
     contact_info: Optional[str] = Field(default=None)
-    contact_phone: Optional[str] = Field(default=None)
     reply_intent: Literal["ANSWER", "CONFIRM", "DENY", "QUESTION", "SKIP", "OTHER"] = Field(
         default="OTHER"
     )
@@ -102,14 +81,15 @@ composer_llm = ChatOpenAI(
     openai_api_key=settings.OPENAI_API_KEY,
 )
 
-_DEMO_KEYS = tuple(key for q in DEMO_QUESTIONS for key in q["keys"])
+_DEMO_KEYS = ("contact_name", "contact_info")
 _SALES_KEYS = tuple(q["key"] for q in SALES_QUESTIONS)
 
 _DEMO_PHASE_CONTEXT = {
     "start": "the user just asked for a demo; USER MESSAGE holds their recent chat messages, "
-             "one per line — extract any demo details they already gave",
-    "collecting": "waiting for the user's answers to the demo questions",
-    "confirming": "showed the user a summary of their details and asked them to confirm it",
+             "one per line — extract a name or email they already gave, and judge language "
+             "only by the LATEST MESSAGE",
+    "collecting": "asked the user for the name and/or email to put on the demo invite "
+                  "(CURRENT STATE shows which one is still null)",
 }
 
 
@@ -129,70 +109,50 @@ async def _extract_demo_turn(user_msg: str, current_data: dict, phase: str) -> d
     out = {key: values.get(key) for key in _DEMO_KEYS}
     out["reply_intent"] = values.get("reply_intent") or "OTHER"
     out["side_question_query"] = values.get("side_question_query")
-    out["language"] = values.get("language") or "English"
+    out["language"] = values.get("language") or "unknown"
     return out
+
+
+_EMAIL_OR_URL = re.compile(r"\S+@\S+|https?://\S+")
+_DEVANAGARI = re.compile(r"[ऀ-ॿ]")
+
+
+def _has_own_words(text: str) -> bool:
+    """Whether a message says enough to tell its language by. A bare email, "ok" or a
+    name doesn't — the LLM calls those English, which would flip a Nepali chat."""
+    if _DEVANAGARI.search(text):
+        return True
+    return len(re.findall(r"[^\W\d_]+", _EMAIL_OR_URL.sub(" ", text))) >= 3
+
+
+def _demo_language(detected: str | None, previous: str | None) -> str:
+    """The language + script to reply in; "unknown" keeps the conversation's earlier one."""
+    if detected and detected.strip().lower() != "unknown":
+        return detected
+    return previous or "English"
 
 
 def _empty_demo_data(data: dict) -> dict:
     return {key: data.get(key) for key in _DEMO_KEYS}
 
 
-def _canonical_demo_value(key: str, value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    question = next(q for q in DEMO_QUESTIONS if key in q["keys"])
-    if question["type"] != "button":
-        return text
-
-    probe = text.lower()
-    matches = [o["title"] for o in question["options"] if o["title"].lower() in probe]
-    if len(matches) == 1:
-        return matches[0]
-    match = _match_button(text, question["options"])
-    return match["title"] if match else None
-
-
 def _is_email(value: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
 
 
-def _is_valid_mobile(value: str) -> bool:
-    digits = re.sub(r"[\s-]", "", value)
-    return bool(re.fullmatch(r"9\d{9}", digits))
-
-
-# Landline/telephone formats vary too much to validate reliably, so we only
-# accept and check mobile numbers — the error message steers the user there.
-_VALIDATORS: dict[str, tuple] = {
-    "contact_info": (
-        _is_email,
-        '"{value}" doesn\'t look like a valid email address — could you double-check it?',
-    ),
-    "contact_phone": (
-        _is_valid_mobile,
-        '"{value}" doesn\'t look like a mobile number — mobile numbers need to start '
-        "with 9 and have exactly 10 digits.",
-    ),
-}
-
-
-def _merge_demo_slots(data: dict, extracted: dict) -> tuple[dict, list[str]]:
-    """Merge every valid extracted value; invalid ones are dropped and reported."""
+def _merge_demo_slots(data: dict, extracted: dict) -> tuple[dict, str | None]:
+    """Merge the extracted name and email. An invalid email is dropped and returned."""
     merged = _empty_demo_data(data)
-    errors = []
+    bad_email = None
     for key in _DEMO_KEYS:
-        value = _canonical_demo_value(key, extracted.get(key))
-        if value is None:
+        value = str(extracted.get(key) or "").strip()
+        if not value:
             continue
-        validator = _VALIDATORS.get(key)
-        if validator and not validator[0](value):
-            errors.append(validator[1].format(value=value))
+        if key == "contact_info" and not _is_email(value):
+            bad_email = value
             continue
         merged[key] = value
-    return merged, errors
+    return merged, bad_email
 
 
 async def _extract_sales_slots(user_msg: str, current_data: dict) -> dict:
@@ -223,22 +183,43 @@ def _merge_sales_slots(data: dict, extracted: dict) -> dict:
 
 # ---------------------------------------------------------------------------
 # DEMO FLOW
-# One message lists every question; each reply is classified (answer, confirm,
-# deny, side question, skip) and the flow moves collecting -> confirming -> booked.
+# Collects just a name and an email, one ask at a time, like a support rep
+# would. Code decides what the next message must do; the reply writer says it
+# naturally with the recent chat in view. Once both are valid, the Cal.com
+# link goes out — its page shows them prefilled, so there is no confirm step.
 # ---------------------------------------------------------------------------
 
-async def _compose(text: str, name: str | None, language: str, keep: Iterable[str] = ()) -> str:
-    """Rewrite an English template politely, in the user's language.
+def _chat_transcript(messages: Iterable, limit: int = 6) -> str:
+    lines = []
+    for m in list(messages)[-limit:]:
+        kind = getattr(m, "type", None)
+        if kind == "human":
+            lines.append(f"Customer: {m.content}")
+        elif kind in ("ai", "system"):  # older threads stored bot replies as system messages
+            lines.append(f"You: {m.content}")
+    return "\n".join(lines)
+
+
+async def _compose(
+    text: str,
+    name: str | None,
+    language: str,
+    keep: Iterable[str] = (),
+    history: Iterable = (),
+) -> str:
+    """Write the next demo message from a brief (an English template), in the
+    user's language, as a natural reply to the recent chat in `history`.
 
     Falls back to the template itself if the LLM fails or drops any value in
-    `keep` (option labels, the user's data, a booking link) — a less polished
-    message beats a wrong one.
+    `keep` (e.g. the booking link) — a less polished message beats a wrong one.
     """
     try:
         response = await composer_llm.ainvoke([
             SystemMessage(content=DEMO_COMPOSER_SYSTEM_PROMPT),
             HumanMessage(content=(
-                f"LANGUAGE: {language}\nCUSTOMER NAME: {name or 'unknown'}\n\nDRAFT:\n{text}"
+                f"CUSTOMER NAME: {name or 'unknown'}\n\n"
+                f"RECENT CHAT:\n{_chat_transcript(history) or '(none)'}\n\nBRIEF:\n{text}\n\n"
+                f"WRITE IN: {language}"
             )),
         ])
     except Exception:
@@ -261,25 +242,18 @@ def _join(*parts: str) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _pending_questions(data: dict) -> list[dict]:
-    """The questions (or halves of the combined contact question) still unanswered."""
-    pending = []
-    for q in DEMO_QUESTIONS:
-        missing = [key for key in q["keys"] if data.get(key) is None]
-        if len(missing) == len(q["keys"]):
-            pending.append(q)
-        else:
-            pending.extend({"type": "open", "question": DEMO_PARTIAL_QUESTIONS[key]}
-                           for key in missing)
-    return pending
+def _is_demo_complete(data: dict) -> bool:
+    return all(data.get(key) for key in _DEMO_KEYS)
 
 
-def _option_titles(questions: list[dict]) -> list[str]:
-    return [o["title"] for q in questions for o in q.get("options", [])]
-
-
-def _errors_block(errors: list[str]) -> str:
-    return "\n".join(f"⚠️ {e}" for e in errors)
+def _missing_label(data: dict) -> str:
+    """What is still needed, for DEMO_NUDGE; a quick yes when nothing is."""
+    return {
+        (True, True): "your name and email",
+        (True, False): "your name",
+        (False, True): "your email",
+        (False, False): "a quick *yes*",
+    }[(data["contact_name"] is None, data["contact_info"] is None)]
 
 
 def _demo_reply(
@@ -293,7 +267,7 @@ def _demo_reply(
     search_query: str | None = None,
 ) -> dict:
     out = {
-        "messages": [SystemMessage(content=text)],
+        "messages": [AIMessage(content=text)],
         "demo_phase": phase,
         "demo_data": data,
         "demo_completed": completed,
@@ -306,65 +280,77 @@ def _demo_reply(
     return out
 
 
+async def _say(
+    state: AgentState,
+    text: str,
+    language: str,
+    name: str | None = None,
+    keep: Iterable[str] = (),
+    after: str | None = None,
+) -> str:
+    """Compose `text` against the recent chat; `after` is a reply already written this turn."""
+    history = [*state["messages"], *([AIMessage(content=after)] if after else [])]
+    return await _compose(text, name or _user_name(state), language, keep=keep, history=history)
+
+
 async def _demo_skip(state: AgentState, language: str) -> dict:
     name = _user_name(state)
     text = DEMO_SKIP.replace("{{NAME}}", f" {name}" if name else "")
     return _demo_reply(
-        await _compose(text, name, language),
+        await _say(state, text, language),
         phase=None, data={}, language=language, intent="STOP_DEMO",
     )
 
 
 async def _ask_missing(
-    state: AgentState, data: dict, errors: list[str], got_new: bool, language: str
+    state: AgentState, data: dict, bad_email: str | None, language: str, opener: str = ""
 ) -> dict:
-    pending = _pending_questions(data)
-    lead = DEMO_MISSING if got_new else (DEMO_FIX_LEAD if errors else DEMO_REASK)
-    text = _join(lead, _errors_block(errors), numbered([demo_question_text(q) for q in pending]))
-    text = await _compose(text, _user_name(state), language, keep=_option_titles(pending))
-    return _demo_reply(text, phase="collecting", data=data, language=language)
+    """One short message asking only for what is still missing."""
+    if bad_email:
+        ask = DEMO_BAD_EMAIL.replace("{{VALUE}}", bad_email)
+        if data["contact_name"] is None:
+            ask = f"{ask} {DEMO_ASK_NAME}"
+    elif data["contact_name"] is None and data["contact_info"] is None:
+        ask = DEMO_ASK_NAME_EMAIL
+    elif data["contact_info"] is None:
+        ask = DEMO_ASK_EMAIL
+    else:
+        ask = DEMO_ASK_NAME
+    text = f"{opener} {ask}".strip()
+    return _demo_reply(
+        await _say(state, text, language, name=data["contact_name"]),
+        phase="collecting", data=data, language=language,
+    )
 
 
-async def _ask_confirm(state: AgentState, data: dict, errors: list[str], language: str) -> dict:
-    summary = numbered([
-        f"{q['question']}\n   ➜ {', '.join(data[key] for key in q['keys'])}"
-        for q in DEMO_QUESTIONS
-    ])
-    text = _join(_errors_block(errors), DEMO_CONFIRM_LEAD, summary, DEMO_CONFIRM_ASK)
-    text = await _compose(text, _user_name(state), language, keep=[data[k] for k in _DEMO_KEYS])
-    return _demo_reply(text, phase="confirming", data=data, language=language)
-
-
-async def _side_answer(
-    state: AgentState, turn: dict, data: dict, phase: str, follow_up: str, language: str
-) -> dict:
+async def _side_answer(state: AgentState, turn: dict, data: dict, language: str) -> dict:
     tool_data, query = await _retrieve(
         state.get("user_data") or {}, None, turn.get("side_question_query")
     )
     answer = await _kb_answer(state, tool_data, extra_instruction=DEMO_SIDE_ANSWER_INSTRUCTION)
-    follow = await _compose(follow_up, _user_name(state), language)
+    answer_text = str(answer.content).strip()
+    nudge = DEMO_NUDGE.replace("{{MISSING}}", _missing_label(data))
+    follow = await _say(state, nudge, language, name=data["contact_name"], after=answer_text)
     return _demo_reply(
-        _join(str(answer.content).strip(), follow),
-        phase=phase, data=data, language=language, search_query=query,
+        _join(answer_text, follow),
+        phase="collecting", data=data, language=language, search_query=query,
     )
 
 
 async def _book_demo(state: AgentState, data: dict, language: str) -> dict:
-    notes = (
-        f"Business: {data['business_name']} | Channels: {data['channels']} | "
-        f"Size: {data['monthly_volume']} | Phone: {data['contact_phone']}"
-    )
-    name = _user_name(state)
+    name = data["contact_name"]
     try:
-        link = build_booking_link(name=data["contact_name"], email=data["contact_info"], notes=notes)
+        link = build_booking_link(
+            name=name, email=data["contact_info"], notes="Booked from the RelayN chat"
+        )
     except CalComError:
         logger.exception("could not build the Cal.com booking link")
-        # Stay in confirming with the answers kept, so a later "yes" retries.
+        # Stay in the flow with the details kept, so a later "yes" retries.
         return _demo_reply(
-            await _compose(DEMO_BOOKING_ERROR, name, language),
-            phase="confirming", data=data, language=language,
+            await _say(state, DEMO_BOOKING_ERROR, language, name=name),
+            phase="collecting", data=data, language=language,
         )
-    text = await _compose(DEMO_BOOKED.replace("{{LINK}}", link), name, language, keep=[link])
+    text = await _say(state, DEMO_BOOKED.replace("{{LINK}}", link), language, name=name, keep=[link])
     return _demo_reply(
         f"{text} [DEMO_BOOKED]",
         phase=None, data={**data, "cal_booking_link": link},
@@ -373,77 +359,47 @@ async def _book_demo(state: AgentState, data: dict, language: str) -> dict:
 
 
 async def _start_demo(state: AgentState) -> dict:
-    # Prefill from what the user already said in this conversation.
+    # Prefill from the chat profile and from what the user already said.
     recent = [m.content for m in state["messages"] if getattr(m, "type", None) == "human"][-10:]
-    turn = await _extract_demo_turn("\n".join(recent), _empty_demo_data({}), "start")
-    language = turn["language"]
-    data, _invalid = _merge_demo_slots(_empty_demo_data({}), turn)  # bad prefills just get asked
+    latest = next((text for text in reversed(recent) if _has_own_words(text)), recent[-1])
+    profile = _empty_demo_data({"contact_name": _user_name(state)})
+    turn = await _extract_demo_turn(
+        f"LATEST MESSAGE\n{latest}\n\nALL RECENT MESSAGES, oldest first\n" + "\n".join(recent),
+        profile, "start",
+    )
+    language = _demo_language(turn["language"], None)
+    data, _bad = _merge_demo_slots(profile, turn)  # a bad prefilled email just gets asked for
 
-    pending = _pending_questions(data)
-    if not pending:
-        return await _ask_confirm(state, data, [], language)
-
-    name = _user_name(state)
-    prefilled = [key for key in _DEMO_KEYS if data[key] is not None]
-    noted = (
-        DEMO_PREFILLED_NOTE + "\n"
-        + "\n".join(f"• {DEMO_SLOT_LABELS[key]}: {data[key]}" for key in prefilled)
-        if prefilled else ""
-    )
-    text = _join(
-        DEMO_INTRO.replace("{{NAME}}", f", {name}" if name else ""),
-        noted,
-        numbered([demo_question_text(q) for q in pending]),
-    )
-    text = await _compose(
-        text, name, language,
-        keep=_option_titles(pending) + [data[key] for key in prefilled],
-    )
-    return _demo_reply(text, phase="collecting", data=data, language=language)
+    if _is_demo_complete(data):
+        return await _book_demo(state, data, language)
+    name = data["contact_name"]
+    opener = DEMO_START.replace("{{NAME}}", f", {name}" if name else "")
+    return await _ask_missing(state, data, None, language, opener=opener)
 
 
 async def demo_node(state: AgentState) -> dict:
     if state.get("tool_data") == "START_DEMO":
         return await _start_demo(state)
 
-    phase = state.get("demo_phase") or "collecting"
+    # Threads from the old flow may carry extra fields or a "confirming" phase;
+    # only the name and email matter now, and every active phase is handled alike.
     data = _empty_demo_data(dict(state.get("demo_data") or {}))
     user_msg = state["messages"][-1].content.strip()
 
-    turn = await _extract_demo_turn(user_msg, data, phase)
-    language = turn["language"]
+    turn = await _extract_demo_turn(user_msg, data, "collecting")
+    detected = turn["language"] if _has_own_words(user_msg) else "unknown"
+    language = _demo_language(detected, state.get("demo_language"))
     intent = turn["reply_intent"]
-    merged, errors = _merge_demo_slots(data, turn)
-    changed = merged != data
+    merged, bad_email = _merge_demo_slots(data, turn)
 
-    # A plain "no" while collecting answers "should we continue?" -> skip too.
-    if intent == "SKIP" or (phase == "collecting" and intent == "DENY" and not changed):
+    # A plain "no" to carrying on with the booking counts as skipping it.
+    if intent == "SKIP" or (intent == "DENY" and merged == data):
         return await _demo_skip(state, language)
-
-    if phase == "confirming" and not _pending_questions(merged):
-        if changed or errors:
-            return await _ask_confirm(state, merged, errors, language)
-        if intent == "CONFIRM":
-            return await _book_demo(state, merged, language)
-        if intent == "QUESTION":
-            return await _side_answer(
-                state, turn, merged, "confirming", DEMO_CONTINUE_CONFIRMING, language
-            )
-        if intent == "DENY":
-            return _demo_reply(
-                await _compose(DEMO_WHICH_FIX, _user_name(state), language),
-                phase="confirming", data=merged, language=language,
-            )
-        return await _ask_confirm(state, merged, [], language)
-
-    # COLLECTING
     if intent == "QUESTION":
-        return await _side_answer(
-            state, turn, merged, "collecting", DEMO_CONTINUE_COLLECTING, language
-        )
-    if _pending_questions(merged):
-        return await _ask_missing(state, merged, errors, changed, language)
-    return await _ask_confirm(state, merged, errors, language)
+        return await _side_answer(state, turn, merged, language)
+    if _is_demo_complete(merged) and not bad_email:
+        return await _book_demo(state, merged, language)
+    return await _ask_missing(state, merged, bad_email, language)
 
 
 async def demo_end_node(state: AgentState) -> dict:

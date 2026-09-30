@@ -6,6 +6,7 @@ from agent.nodes import (
     demo_node,
     executor_node,
     generator_node,
+    greeting_node,
     handoff_node,
     sales_end_node,
     sales_node,
@@ -19,6 +20,7 @@ _INTENT_TO_NODE = {
     "CONTACT_SALES": "sales",
     "STOP_SALES": "sales_end",
     "HANDOFF": "handoff",
+    "GREETING": "greeting",
     "PRODUCT_QA": "executor",
     "PRICING": "executor",
 }
@@ -40,6 +42,7 @@ def build_workflow() -> StateGraph:
     wf.add_node("sales", sales_node)
     wf.add_node("sales_end", sales_end_node)
     wf.add_node("handoff", handoff_node)
+    wf.add_node("greeting", greeting_node)
 
     wf.add_edge(START, "router")
     wf.add_conditional_edges(
@@ -51,6 +54,7 @@ def build_workflow() -> StateGraph:
             "sales": "sales",
             "sales_end": "sales_end",
             "handoff": "handoff",
+            "greeting": "greeting",
             "executor": "executor",
             "generator": "generator",
         },
@@ -63,5 +67,6 @@ def build_workflow() -> StateGraph:
     wf.add_edge("sales", END)
     wf.add_edge("sales_end", END)
     wf.add_edge("handoff", END)
+    wf.add_edge("greeting", END)
 
     return wf

@@ -12,9 +12,11 @@ class AgentState(TypedDict, total=False):
     tool_data: Any           # retrieved-context string, or a sub-flow marker
 
     # --- DEMO FLOW ---
-    demo_phase: str | None   # None = inactive; "collecting" | "confirming"
-    # Always contains all six demo slots; missing values are None.
+    demo_phase: str | None   # None = inactive; "collecting" | "scheduling"
+    # contact_name and contact_info (None until given); booked_start and
+    # booking_uid are added once the slot is booked.
     demo_data: dict
+    demo_schedule: dict      # {day, target, shown}: the day on offer and slots already shown
     demo_completed: bool
     demo_language: str       # language the user writes in; the composer replies in it
 

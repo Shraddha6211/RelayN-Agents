@@ -5,12 +5,13 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from agent.prompts import ROUTER_SYSTEM_PROMPT
+from agent.prompts import ROUTER_SYSTEM_PROMPT, greeting_reply
 from agent.state import AgentState
 from config import settings
 
 STOP_WORDS = {"stop", "quit", "exit", "cancel", "back", "menu"}
-_DEMO_ACTIVE_PHASES = {"collecting", "confirming"}
+# "confirming" only exists in threads saved by the old flow.
+_DEMO_ACTIVE_PHASES = {"collecting", "scheduling", "confirming"}
 
 _DEMO_TRIGGERS = {"book demo", "book a demo", "schedule demo", "schedule a demo",
                   "get a demo", "demo", "see a demo"}
@@ -70,7 +71,11 @@ async def router_node(state: AgentState) -> dict:
     if sales_step > 0 and not sales_completed:
         return {"intent": "STOP_SALES" if _has_stop_word(raw) else "CONTACT_SALES"}
 
-    # 3. KEYWORD FAST PATHS
+    # 3. BARE GREETING — a fixed reply in the greeting's own language (greeting_node)
+    if greeting_reply(raw):
+        return {"intent": "GREETING", "tool_data": None}
+
+    # 4. KEYWORD FAST PATHS
     if msg in _DEMO_TRIGGERS:
         return {"intent": "BOOK_DEMO", "tool_data": "START_DEMO"}
     if msg in _SALES_TRIGGERS:
@@ -78,7 +83,7 @@ async def router_node(state: AgentState) -> dict:
     if msg in _HANDOFF_TRIGGERS:
         return {"intent": "HANDOFF"}
 
-    # 4. LLM FALLBACK
+    # 5. LLM FALLBACK
     result = await structured_router.ainvoke(
         {"history": messages[-6:-1], "input": raw}
     )

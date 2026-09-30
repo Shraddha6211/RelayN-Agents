@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     CAL_API_KEY: str = ""
     CAL_EVENT_TYPE_ID: int = 0
     CAL_TIMEZONE: str = "Asia/Kathmandu"
-    CAL_BOOKING_URL: str = ""
 
     @property
     def REDIS_URL(self) -> str:

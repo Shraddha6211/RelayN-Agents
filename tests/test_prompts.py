@@ -25,6 +25,7 @@ def test_every_reply_prompt_mirrors_the_users_script():
 
     assert "Devanagari only if the customer writes in Devanagari" in MIRROR_SCRIPT_RULE
     assert "romanized Nepali" in MIRROR_SCRIPT_RULE
+    assert "Never answer Hindi in Nepali" in MIRROR_SCRIPT_RULE
     assert MIRROR_SCRIPT_RULE in DEMO_COMPOSER_SYSTEM_PROMPT
     assert MIRROR_SCRIPT_RULE in GENERATOR_SYSTEM_PROMPT
 

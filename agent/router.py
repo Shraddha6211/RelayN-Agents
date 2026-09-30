@@ -10,6 +10,7 @@ from agent.state import AgentState
 from config import settings
 
 STOP_WORDS = {"stop", "quit", "exit", "cancel", "back", "menu"}
+_DEMO_ACTIVE_PHASES = {"collecting", "confirming"}
 
 _DEMO_TRIGGERS = {"book demo", "book a demo", "schedule demo", "schedule a demo",
                   "get a demo", "demo", "see a demo"}
@@ -56,14 +57,14 @@ async def router_node(state: AgentState) -> dict:
     raw = messages[-1].content
     msg = _norm(raw)
 
-    demo_step = state.get("demo_step", 0)
-    demo_completed = state.get("demo_completed", False)
     sales_step = state.get("sales_step", 0)
     sales_completed = state.get("sales_completed", False)
 
-    # 1. ACTIVE DEMO LOCK
-    if demo_step > 0 and not demo_completed:
-        return {"intent": "STOP_DEMO" if _has_stop_word(raw) else "BOOK_DEMO"}
+    # 1. ACTIVE DEMO LOCK. Only a message that is nothing but a stop word is a hard
+    # stop; stop words inside answers ("Back Office Ltd") are left to demo_node,
+    # whose LLM tells a real answer from a request to skip.
+    if state.get("demo_phase") in _DEMO_ACTIVE_PHASES:
+        return {"intent": "STOP_DEMO" if msg in STOP_WORDS else "BOOK_DEMO"}
 
     # 2. ACTIVE SALES LOCK
     if sales_step > 0 and not sales_completed:

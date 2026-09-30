@@ -18,10 +18,7 @@ def test_route_decision_maps_every_intent():
         assert route_decision({"intent": intent}) == node
 
 
-_FULL_DEMO = {
-    "business_name": "Acme", "channels": "WhatsApp", "monthly_volume": "500 to 2k",
-    "contact_name": "Sam", "contact_info": "sam@acme.com", "contact_phone": "9800000000",
-}
+_FULL_DEMO = {"contact_name": "Sam", "contact_info": "sam@acme.com"}
 
 
 def _demo_turn(reply_intent, **slots):
@@ -35,7 +32,7 @@ def _patch_demo_llms(monkeypatch, turns):
     import agent.nodes as nodes
 
     async def extract(message, _data, _phase):
-        return turns[message]
+        return turns[message.splitlines()[-1]]  # start sends every recent message; the last is new
 
     async def compose(text, *_args, **_kwargs):
         return text
@@ -51,10 +48,8 @@ def test_demo_flow_persists_phase_across_invocations(monkeypatch):
 
     _patch_demo_llms(monkeypatch, {
         "book demo": _demo_turn("OTHER"),
-        "Acme, WhatsApp": _demo_turn("ANSWER", business_name="Acme", channels="WhatsApp"),
-        "rest": _demo_turn("ANSWER", **{k: v for k, v in _FULL_DEMO.items()
-                                        if k not in ("business_name", "channels")}),
-        "yes": _demo_turn("CONFIRM"),
+        "sam@acme": _demo_turn("ANSWER", contact_info="sam@acme"),
+        "sam@acme.com": _demo_turn("ANSWER", contact_info="sam@acme.com"),
     })
     monkeypatch.setattr(nodes, "build_booking_link", lambda **_kw: "https://cal.com/relayn/demo")
 
@@ -65,19 +60,16 @@ def test_demo_flow_persists_phase_across_invocations(monkeypatch):
         {"messages": [HumanMessage(content="book demo")],
          "user_data": {"user_name": "Sam"}}, cfg))
     assert s1["demo_phase"] == "collecting"
-    assert "5. " in s1["messages"][-1].content
+    assert "email" in s1["messages"][-1].content.lower()
 
-    s2 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="Acme, WhatsApp")]}, cfg))
-    assert s2["demo_data"]["business_name"] == "Acme"
+    s2 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="sam@acme")]}, cfg))
+    assert s2["demo_data"]["contact_info"] is None
     assert s2["demo_phase"] == "collecting"
 
-    s3 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="rest")]}, cfg))
-    assert s3["demo_phase"] == "confirming"
-
-    s4 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="yes")]}, cfg))
-    assert s4["demo_completed"] is True
-    assert s4["demo_phase"] is None
-    assert "[DEMO_BOOKED]" in s4["messages"][-1].content
+    s3 = asyncio.run(app.ainvoke({"messages": [HumanMessage(content="sam@acme.com")]}, cfg))
+    assert s3["demo_completed"] is True
+    assert s3["demo_phase"] is None
+    assert "[DEMO_BOOKED]" in s3["messages"][-1].content
 
 
 def test_demo_hard_stop_word_resets_flow(monkeypatch):

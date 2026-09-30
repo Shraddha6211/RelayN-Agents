@@ -29,10 +29,10 @@ uvicorn main:app --reload --port 8002
 pytest -q
 ```
 
-Demo booking uses Cal.com after the six demo details are collected. Add
-`CAL_API_KEY`, `CAL_EVENT_TYPE_ID`, and optionally `CAL_TIMEZONE` to `.env`.
-The CLI presents available Cal.com slots, accepts a slot number, asks for
-confirmation, and only reports the demo as booked after Cal.com confirms it.
+Demo booking asks conversationally for just a name and an email (the chat
+profile name is used when there is one), then sends a Cal.com booking link with
+both prefilled; the user picks a time on that page. Set `CAL_BOOKING_URL` in
+`.env` to the event type's public `https://cal.com/{username}/{event-slug}` page.
 
 Or `docker compose up --build` (published on `:8002`).
 

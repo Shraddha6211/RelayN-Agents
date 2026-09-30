@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import date, datetime, time, timedelta
 from typing import Iterable, Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -13,15 +14,28 @@ from agent.prompts import (
     DEMO_ASK_EMAIL,
     DEMO_ASK_NAME,
     DEMO_ASK_NAME_EMAIL,
+    DEMO_ASK_TIME,
     DEMO_BAD_EMAIL,
     DEMO_BOOKED,
-    DEMO_BOOKING_ERROR,
+    DEMO_CALENDAR_ERROR,
     DEMO_COMPOSER_SYSTEM_PROMPT,
+    DEMO_DAY_FULL,
+    DEMO_DAY_USED_UP,
+    DEMO_MORE_HINT,
+    DEMO_MORE_SLOTS,
     DEMO_NUDGE,
+    DEMO_NUDGE_TIME,
+    DEMO_OPEN_TIMES,
+    DEMO_OUT_OF_HOURS,
+    DEMO_PICK_SLOT,
     DEMO_SIDE_ANSWER_INSTRUCTION,
     DEMO_SKIP,
+    DEMO_SLOT_TAKEN,
     DEMO_START,
+    DEMO_TRANSLATE_SYSTEM_PROMPT,
     DEMO_TURN_SYSTEM_PROMPT,
+    DEMO_UP_TO_5PM,
+    DEMO_WEEKDAYS_ONLY,
     GENERATOR_SYSTEM_PROMPT,
     HANDOFF_MESSAGE,
     RELAYN_BUSINESS,
@@ -29,12 +43,14 @@ from agent.prompts import (
     SALES_EXTRACTION_SYSTEM_PROMPT,
     SALES_QUESTIONS,
     format_question,
+    greeting_reply,
     render,
 )
+from agent import scheduling as sched
 from agent.state import AgentState
 from agent.tools import search_knowledge_base
 from config import settings
-from calcom_client import CalComError, build_booking_link
+from calcom_client import CalComError, create_booking, get_day_slots
 
 logger = logging.getLogger("relayn_agents.nodes")
 
@@ -50,6 +66,9 @@ def _wizard_summary(data: dict) -> str:
 class DemoTurn(BaseModel):
     contact_name: Optional[str] = Field(default=None)
     contact_info: Optional[str] = Field(default=None)
+    requested_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    requested_time: Optional[str] = Field(default=None, description="HH:MM, 24-hour")
+    wants_more_slots: bool = Field(default=False)
     reply_intent: Literal["ANSWER", "CONFIRM", "DENY", "QUESTION", "SKIP", "OTHER"] = Field(
         default="OTHER"
     )
@@ -90,10 +109,13 @@ _DEMO_PHASE_CONTEXT = {
              "only by the LATEST MESSAGE",
     "collecting": "asked the user for the name and/or email to put on the demo invite "
                   "(CURRENT STATE shows which one is still null)",
+    "scheduling": "asked which day and time suits the user for the demo (Monday to Friday, "
+                  "10:30 am to 5 pm), or listed open times on OFFERED DAY for them to pick from",
 }
 
 
 async def _extract_demo_turn(user_msg: str, current_data: dict, phase: str) -> dict:
+    """`current_data` holds the name/email so far, plus `offered_day` while scheduling."""
     context = json.dumps(
         {key: current_data.get(key) for key in _DEMO_KEYS},
         ensure_ascii=True,
@@ -101,12 +123,17 @@ async def _extract_demo_turn(user_msg: str, current_data: dict, phase: str) -> d
     result = await demo_extractor.ainvoke([
         SystemMessage(content=DEMO_TURN_SYSTEM_PROMPT),
         HumanMessage(content=(
+            f"TODAY: {sched.now():%A %Y-%m-%d}\n"
+            f"OFFERED DAY: {current_data.get('offered_day') or 'none'}\n"
             f"BOT IS CURRENTLY: {_DEMO_PHASE_CONTEXT[phase]}\n\n"
             f"CURRENT STATE:\n{context}\n\nUSER MESSAGE:\n{user_msg}"
         )),
     ])
     values = result.model_dump() if isinstance(result, DemoTurn) else dict(result)
     out = {key: values.get(key) for key in _DEMO_KEYS}
+    out["requested_date"] = values.get("requested_date")
+    out["requested_time"] = values.get("requested_time")
+    out["wants_more_slots"] = bool(values.get("wants_more_slots"))
     out["reply_intent"] = values.get("reply_intent") or "OTHER"
     out["side_question_query"] = values.get("side_question_query")
     out["language"] = values.get("language") or "unknown"
@@ -184,9 +211,9 @@ def _merge_sales_slots(data: dict, extracted: dict) -> dict:
 # ---------------------------------------------------------------------------
 # DEMO FLOW
 # Collects just a name and an email, one ask at a time, like a support rep
-# would. Code decides what the next message must do; the reply writer says it
-# naturally with the recent chat in view. Once both are valid, the Cal.com
-# link goes out — its page shows them prefilled, so there is no confirm step.
+# would, then books a slot in the chat (DEMO SCHEDULING below). Code decides
+# what the next message must do; the reply writer says it naturally with the
+# recent chat in view.
 # ---------------------------------------------------------------------------
 
 def _chat_transcript(messages: Iterable, limit: int = 6) -> str:
@@ -200,6 +227,16 @@ def _chat_transcript(messages: Iterable, limit: int = 6) -> str:
     return "\n".join(lines)
 
 
+_CLOCK_TIME = re.compile(r"\d{1,2}:\d{2}")
+_BULLET = re.compile(r"^\s*[•*-]\s", re.MULTILINE)
+
+
+def _invents_times(out: str, source: str) -> bool:
+    """A clock time the source line doesn't have, or a list of its own."""
+    return bool(set(_CLOCK_TIME.findall(out)) - set(_CLOCK_TIME.findall(source))
+                or _BULLET.search(out))
+
+
 async def _compose(
     text: str,
     name: str | None,
@@ -208,29 +245,62 @@ async def _compose(
     history: Iterable = (),
 ) -> str:
     """Write the next demo message from a brief (an English template), in the
-    user's language, as a natural reply to the recent chat in `history`.
+    user's language, as a natural reply to the recent chat in `history`."""
+    return await _write(
+        DEMO_COMPOSER_SYSTEM_PROMPT,
+        f"CUSTOMER NAME: {name or 'unknown'}\n\n"
+        f"RECENT CHAT:\n{_chat_transcript(history) or '(none)'}\n\nBRIEF:\n{text}\n\n"
+        f"WRITE IN: {language}",
+        text, keep=keep,
+    )
 
-    Falls back to the template itself if the LLM fails or drops any value in
-    `keep` (e.g. the booking link) — a less polished message beats a wrong one.
+
+async def _translate(text: str, language: str, keep: Iterable[str] = ()) -> str:
+    """A faithful translation of a fixed line, for the text around a slot list.
+    English goes out exactly as written."""
+    if language.strip().lower().startswith("english"):
+        return text
+    return await _write(
+        DEMO_TRANSLATE_SYSTEM_PROMPT, f"WRITE IN: {language}\n\nMESSAGE:\n{text}",
+        text, keep=keep, no_times=True,
+    )
+
+
+async def _write(
+    system: str, prompt: str, text: str, keep: Iterable[str] = (), no_times: bool = False
+) -> str:
+    """Run the reply writer and check its output.
+
+    Every value in `keep` must appear verbatim, and with `no_times` the message
+    may not add a clock time or a list of its own (the lines around a slot list,
+    where the writer would otherwise invent slots). A miss gets one retry that names
+    it; after that, or if the LLM fails, the English template `text` goes out —
+    a less polished message beats a wrong one.
     """
-    try:
-        response = await composer_llm.ainvoke([
-            SystemMessage(content=DEMO_COMPOSER_SYSTEM_PROMPT),
-            HumanMessage(content=(
-                f"CUSTOMER NAME: {name or 'unknown'}\n\n"
-                f"RECENT CHAT:\n{_chat_transcript(history) or '(none)'}\n\nBRIEF:\n{text}\n\n"
-                f"WRITE IN: {language}"
-            )),
-        ])
-    except Exception:
-        logger.exception("demo composer failed; sending the template")
-        return text
-    out = (getattr(response, "content", "") or "").strip()
-    dropped = [k for k in keep if k and k not in out]
-    if not out or dropped:
-        logger.warning("demo composer dropped %s; sending the template", dropped or "everything")
-        return text
-    return out
+    messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+    dropped: list[str] = []
+    invented = False
+    for _attempt in range(2):
+        try:
+            response = await composer_llm.ainvoke(messages)
+        except Exception:
+            logger.exception("demo composer failed; sending the template")
+            return text
+        out = (getattr(response, "content", "") or "").strip()
+        dropped = [k for k in keep if k and k not in out]
+        invented = no_times and _invents_times(out, text)
+        if out and not dropped and not invented:
+            return out
+        problems = []
+        if dropped or not out:
+            problems.append("You left out " + ", ".join(f'"{k}"' for k in dropped or ["the message"])
+                            + " — include each exactly as written.")
+        if invented:
+            problems.append("Do not mention any times or write a list — only what the brief says.")
+        messages = [*messages, AIMessage(content=out), HumanMessage(content=" ".join(problems))]
+    logger.warning("demo composer missed the brief (dropped %s, invented times: %s); "
+                   "sending the template", dropped, invented)
+    return text
 
 
 def _user_name(state: AgentState) -> str | None:
@@ -247,12 +317,11 @@ def _is_demo_complete(data: dict) -> bool:
 
 
 def _missing_label(data: dict) -> str:
-    """What is still needed, for DEMO_NUDGE; a quick yes when nothing is."""
+    """What is still needed, for DEMO_NUDGE."""
     return {
         (True, True): "your name and email",
         (True, False): "your name",
         (False, True): "your email",
-        (False, False): "a quick *yes*",
     }[(data["contact_name"] is None, data["contact_info"] is None)]
 
 
@@ -262,6 +331,7 @@ def _demo_reply(
     phase: str | None,
     data: dict,
     language: str,
+    schedule: dict | None = None,
     intent: str = "BOOK_DEMO",
     completed: bool = False,
     search_query: str | None = None,
@@ -270,6 +340,7 @@ def _demo_reply(
         "messages": [AIMessage(content=text)],
         "demo_phase": phase,
         "demo_data": data,
+        "demo_schedule": schedule or {},
         "demo_completed": completed,
         "demo_language": language,
         "intent": intent,
@@ -323,39 +394,198 @@ async def _ask_missing(
     )
 
 
-async def _side_answer(state: AgentState, turn: dict, data: dict, language: str) -> dict:
+async def _side_answer(
+    state: AgentState, turn: dict, data: dict, schedule: dict, language: str
+) -> dict:
     tool_data, query = await _retrieve(
         state.get("user_data") or {}, None, turn.get("side_question_query")
     )
     answer = await _kb_answer(state, tool_data, extra_instruction=DEMO_SIDE_ANSWER_INSTRUCTION)
     answer_text = str(answer.content).strip()
-    nudge = DEMO_NUDGE.replace("{{MISSING}}", _missing_label(data))
+    complete = _is_demo_complete(data)
+    nudge = DEMO_NUDGE_TIME if complete else DEMO_NUDGE.replace("{{MISSING}}", _missing_label(data))
     follow = await _say(state, nudge, language, name=data["contact_name"], after=answer_text)
     return _demo_reply(
         _join(answer_text, follow),
-        phase="collecting", data=data, language=language, search_query=query,
+        phase="scheduling" if complete else "collecting",
+        data=data, schedule=schedule, language=language, search_query=query,
     )
 
 
-async def _book_demo(state: AgentState, data: dict, language: str) -> dict:
-    name = data["contact_name"]
+# ---------------------------------------------------------------------------
+# DEMO SCHEDULING
+# The bot books the slot itself — no links. The extractor only reads the day
+# and time the user asked for; code decides the day, the slots on offer
+# (agent/scheduling.py) and whether to book. demo_schedule remembers the day
+# on offer, the time it was centred on, and the slots already shown.
+# ---------------------------------------------------------------------------
+
+_BOOKING_NOTES = "Booked from the RelayN chat"
+_FIRST_OFFER = 5
+_MORE_OFFER = 10
+_MAX_DAYS_AHEAD = 10
+
+
+def _parse_date(value: object) -> date | None:
     try:
-        link = build_booking_link(
-            name=name, email=data["contact_info"], notes="Booked from the RelayN chat"
-        )
-    except CalComError:
-        logger.exception("could not build the Cal.com booking link")
-        # Stay in the flow with the details kept, so a later "yes" retries.
-        return _demo_reply(
-            await _say(state, DEMO_BOOKING_ERROR, language, name=name),
-            phase="collecting", data=data, language=language,
-        )
-    text = await _say(state, DEMO_BOOKED.replace("{{LINK}}", link), language, name=name, keep=[link])
+        return date.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _parse_time(value: object) -> time | None:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(value or "").strip())
+    if not match or int(match[1]) > 23 or int(match[2]) > 59:
+        return None
+    return time(int(match[1]), int(match[2]))
+
+
+async def _open_slots(day: date) -> list[datetime]:
+    return sched.open_slots(await get_day_slots(day))
+
+
+def _slot_lines(slots: list[datetime]) -> str:
+    return "\n".join(f"• {sched.fmt_time(s)}" for s in slots)
+
+
+async def _scheduling_reply(
+    state: AgentState, text: str, data: dict, schedule: dict, language: str,
+    keep: Iterable[str] = (),
+) -> dict:
     return _demo_reply(
-        f"{text} [DEMO_BOOKED]",
-        phase=None, data={**data, "cal_booking_link": link},
+        await _say(state, text, language, name=data["contact_name"], keep=keep),
+        phase="scheduling", data=data, schedule=schedule, language=language,
+    )
+
+
+async def _slot_message(
+    state: AgentState, data: dict, language: str, *,
+    lead: str, picks: list[datetime], note: str = "", note_keep: Iterable[str] = (),
+) -> str:
+    """Lead, the slot list, then a note. The list is added by code so it is always
+    there; the lead and note are translated, not rewritten, so they say exactly
+    what they should and no invented times slip in."""
+    body = _join(await _translate(lead, language), _slot_lines(picks))
+    if not note:
+        return body
+    return _join(body, await _translate(note, language, keep=note_keep))
+
+
+async def _offer_slots(
+    state: AgentState, data: dict, language: str, *,
+    lead: str, day: date, target: time, slots: list[datetime],
+) -> dict:
+    """The five open slots closest to `target`, with a note that the day has more."""
+    picks = sched.closest(slots, target, exclude=(), count=_FIRST_OFFER)
+    text = await _slot_message(
+        state, data, language,
+        lead=lead.replace("{{DAY}}", sched.fmt_day(day)), picks=picks,
+        note=DEMO_MORE_HINT if len(slots) > len(picks) else "",
+    )
+    schedule = {
+        "day": day.isoformat(),
+        "target": f"{target:%H:%M}",
+        "shown": [p.isoformat() for p in picks],
+    }
+    return _demo_reply(text, phase="scheduling", data=data, schedule=schedule, language=language)
+
+
+async def _more_slots(state: AgentState, data: dict, schedule: dict, language: str) -> dict:
+    day = _parse_date(schedule["day"])
+    target = _parse_time(schedule.get("target")) or sched.FIRST_START
+    shown = [datetime.fromisoformat(s) for s in schedule.get("shown", [])]
+    picks = sched.closest(await _open_slots(day), target, exclude=shown, count=_MORE_OFFER)
+    if not picks:
+        text = DEMO_DAY_USED_UP.replace("{{DAY}}", sched.fmt_day(day))
+        return await _scheduling_reply(state, text, data, schedule, language)
+    text = await _slot_message(
+        state, data, language,
+        lead=DEMO_MORE_SLOTS.replace("{{DAY}}", sched.fmt_day(day)), picks=picks,
+        note=DEMO_UP_TO_5PM, note_keep=["5 pm"],
+    )
+    schedule = {**schedule, "shown": [*schedule.get("shown", []), *(p.isoformat() for p in picks)]}
+    return _demo_reply(text, phase="scheduling", data=data, schedule=schedule, language=language)
+
+
+async def _booked(
+    state: AgentState, data: dict, slot: datetime, booking: dict, language: str
+) -> dict:
+    text = (DEMO_BOOKED.replace("{{DAY}}", sched.fmt_day(slot.date()))
+            .replace("{{TIME}}", sched.fmt_time(slot)))
+    reply = await _say(state, text, language, name=data["contact_name"],
+                       keep=[sched.fmt_time(slot)])
+    return _demo_reply(
+        f"{reply} [DEMO_BOOKED]",
+        phase=None,
+        data={**data, "booked_start": slot.isoformat(), "booking_uid": booking.get("uid")},
         language=language, completed=True,
     )
+
+
+async def _find_slot(
+    state: AgentState, data: dict, requested: date | None, at: time | None, language: str
+) -> dict:
+    """Book the requested slot if it is free; otherwise offer the closest open ones."""
+    day, weekend = sched.plan_day(requested, at, sched.now())
+    slots = await _open_slots(day)
+    full_day = None
+    for _ in range(_MAX_DAYS_AHEAD):
+        if slots:
+            break
+        full_day = full_day or day
+        day = sched.next_weekday(day + timedelta(days=1))
+        slots = await _open_slots(day)
+    if not slots:
+        raise CalComError(f"no open slots within {_MAX_DAYS_AHEAD} days of {day}")
+
+    wanted = datetime.combine(day, at, sched.tz()) if at else None
+    if wanted and not weekend and not full_day and wanted in slots:
+        try:
+            booking = await create_booking(
+                name=data["contact_name"], email=data["contact_info"],
+                start_iso=wanted.isoformat(), notes=_BOOKING_NOTES,
+            )
+            return await _booked(state, data, wanted, booking, language)
+        except CalComError:
+            slots = await _open_slots(day)
+            if wanted in slots:
+                raise  # the slot is still free, so this was a real failure
+            logger.info("slot %s was taken while booking; offering others", wanted)
+
+    if weekend:
+        lead = DEMO_WEEKDAYS_ONLY
+    elif full_day:
+        lead = DEMO_DAY_FULL.replace("{{FULL_DAY}}", sched.fmt_day(full_day))
+    elif at and not sched.within_hours(at):
+        lead = DEMO_OUT_OF_HOURS
+    elif wanted:
+        lead = DEMO_SLOT_TAKEN.replace("{{TIME}}", sched.fmt_time(wanted))
+    else:
+        lead = DEMO_OPEN_TIMES
+    return await _offer_slots(
+        state, data, language,
+        lead=lead, day=day, target=at or sched.FIRST_START, slots=slots,
+    )
+
+
+async def _schedule(
+    state: AgentState, data: dict, schedule: dict, turn: dict, language: str
+) -> dict:
+    offered = _parse_date(schedule.get("day"))
+    requested = _parse_date(turn.get("requested_date"))
+    at = _parse_time(turn.get("requested_time"))
+    wants_more = turn.get("wants_more_slots") or turn.get("reply_intent") == "DENY"
+    try:
+        if not (requested or at):
+            if offered and wants_more:
+                return await _more_slots(state, data, schedule, language)
+            brief = DEMO_PICK_SLOT if offered else DEMO_ASK_TIME
+            return await _scheduling_reply(state, brief, data, schedule, language)
+        # A bare time ("11:30 works") is for the day already on offer.
+        return await _find_slot(state, data, requested or offered, at, language)
+    except CalComError:
+        logger.exception("Cal.com scheduling failed")
+        return await _scheduling_reply(state, DEMO_CALENDAR_ERROR, data, schedule, language)
 
 
 async def _start_demo(state: AgentState) -> dict:
@@ -370,11 +600,13 @@ async def _start_demo(state: AgentState) -> dict:
     language = _demo_language(turn["language"], None)
     data, _bad = _merge_demo_slots(profile, turn)  # a bad prefilled email just gets asked for
 
-    if _is_demo_complete(data):
-        return await _book_demo(state, data, language)
     name = data["contact_name"]
     opener = DEMO_START.replace("{{NAME}}", f", {name}" if name else "")
-    return await _ask_missing(state, data, None, language, opener=opener)
+    if not _is_demo_complete(data):
+        return await _ask_missing(state, data, None, language, opener=opener)
+    if turn.get("requested_date") or turn.get("requested_time"):
+        return await _schedule(state, data, {}, turn, language)
+    return await _scheduling_reply(state, f"{opener} {DEMO_ASK_TIME}", data, {}, language)
 
 
 async def demo_node(state: AgentState) -> dict:
@@ -382,24 +614,32 @@ async def demo_node(state: AgentState) -> dict:
         return await _start_demo(state)
 
     # Threads from the old flow may carry extra fields or a "confirming" phase;
-    # only the name and email matter now, and every active phase is handled alike.
+    # only the name and email matter, and the phase follows from them.
     data = _empty_demo_data(dict(state.get("demo_data") or {}))
+    schedule = dict(state.get("demo_schedule") or {})
     user_msg = state["messages"][-1].content.strip()
+    phase = "scheduling" if _is_demo_complete(data) else "collecting"
 
-    turn = await _extract_demo_turn(user_msg, data, "collecting")
+    turn = await _extract_demo_turn(
+        user_msg, {**data, "offered_day": schedule.get("day")}, phase
+    )
     detected = turn["language"] if _has_own_words(user_msg) else "unknown"
     language = _demo_language(detected, state.get("demo_language"))
     intent = turn["reply_intent"]
     merged, bad_email = _merge_demo_slots(data, turn)
 
-    # A plain "no" to carrying on with the booking counts as skipping it.
-    if intent == "SKIP" or (intent == "DENY" and merged == data):
+    # While collecting, a plain "no" to carrying on counts as skipping; while
+    # scheduling, "no" is about the times offered (_schedule shows more).
+    if intent == "SKIP" or (phase == "collecting" and intent == "DENY" and merged == data):
         return await _demo_skip(state, language)
-    if intent == "QUESTION":
-        return await _side_answer(state, turn, merged, language)
-    if _is_demo_complete(merged) and not bad_email:
-        return await _book_demo(state, merged, language)
-    return await _ask_missing(state, merged, bad_email, language)
+    # "Is 3pm free?" / "any other times?" are about the booking, not side questions.
+    about_times = bool(turn.get("requested_date") or turn.get("requested_time")
+                       or turn.get("wants_more_slots"))
+    if intent == "QUESTION" and not (phase == "scheduling" and about_times):
+        return await _side_answer(state, turn, merged, schedule, language)
+    if not _is_demo_complete(merged) or bad_email:
+        return await _ask_missing(state, merged, bad_email, language)
+    return await _schedule(state, merged, schedule, turn, language)
 
 
 async def demo_end_node(state: AgentState) -> dict:
@@ -546,6 +786,14 @@ async def generator_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # HANDOFF
 # ---------------------------------------------------------------------------
+
+async def greeting_node(state: AgentState) -> dict:
+    return {
+        "messages": [AIMessage(content=greeting_reply(state["messages"][-1].content))],
+        "intent": "GREETING",
+        "tool_data": None,
+    }
+
 
 async def handoff_node(state: AgentState) -> dict:
     return {

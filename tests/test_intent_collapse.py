@@ -4,7 +4,7 @@ def test_collapse_covers_every_internal_intent():
     expected = {
         "BOOK_DEMO": "ORDER", "CONTACT_SALES": "ORDER",
         "PRODUCT_QA": "RAG", "PRICING": "RAG",
-        "GENERAL_CHAT": "CHAT", "HANDOFF": "CHAT",
+        "GENERAL_CHAT": "CHAT", "GREETING": "CHAT", "HANDOFF": "CHAT",
         "STOP_DEMO": "CHAT", "STOP_SALES": "CHAT",
     }
     assert COLLAPSE == expected

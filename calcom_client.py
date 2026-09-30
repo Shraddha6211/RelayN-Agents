@@ -1,7 +1,6 @@
 """Small Cal.com v2 client used by the demo-booking flow."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode
 
 import httpx
 
@@ -28,10 +27,20 @@ def _headers(api_version: str) -> dict[str, str]:
 async def get_available_slots(days_ahead: int = 7) -> dict[str, list[str]]:
     start = datetime.now(timezone.utc)
     end = start + timedelta(days=days_ahead)
+    return await _fetch_slots(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+
+
+async def get_day_slots(day: date) -> list[str]:
+    """Free slot starts (ISO, in CAL_TIMEZONE) on one local day. `end` is inclusive."""
+    slots = await _fetch_slots(day.isoformat(), day.isoformat())
+    return slots.get(day.isoformat(), [])
+
+
+async def _fetch_slots(start: str, end: str) -> dict[str, list[str]]:
     params = {
         "eventTypeId": settings.CAL_EVENT_TYPE_ID,
-        "start": start.strftime("%Y-%m-%d"),
-        "end": end.strftime("%Y-%m-%d"),
+        "start": start,
+        "end": end,
         "timeZone": settings.CAL_TIMEZONE,
     }
     try:
@@ -68,16 +77,3 @@ async def create_booking(*, name: str, email: str, start_iso: str, notes: str | 
     if response.status_code not in (200, 201):
         raise CalComError(f"booking failed: {response.status_code} {response.text}")
     return response.json().get("data", {})
-
-
-def build_booking_link(*, name: str, email: str, notes: str) -> str:
-    """A Cal.com public booking page URL with attendee details prefilled.
-
-    The user picks their own date/time on Cal.com's page — no slots API call,
-    no booking-creation API call. Requires CAL_BOOKING_URL (the event type's
-    public https://cal.com/{username}/{event-slug} page) to be configured.
-    """
-    if not settings.CAL_BOOKING_URL:
-        raise CalComError("Cal.com booking link is not configured")
-    query = urlencode({"name": name, "email": email, "notes": notes})
-    return f"{settings.CAL_BOOKING_URL}?{query}"

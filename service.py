@@ -25,6 +25,7 @@ COLLAPSE = {
     "PRODUCT_QA": "RAG",
     "PRICING": "RAG",
     "GENERAL_CHAT": "CHAT",
+    "GREETING": "CHAT",
     "HANDOFF": "CHAT",
     "STOP_DEMO": "CHAT",
     "STOP_SALES": "CHAT",

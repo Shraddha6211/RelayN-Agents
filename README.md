@@ -29,10 +29,13 @@ uvicorn main:app --reload --port 8002
 pytest -q
 ```
 
-Demo booking asks conversationally for just a name and an email (the chat
-profile name is used when there is one), then sends a Cal.com booking link with
-both prefilled; the user picks a time on that page. Set `CAL_BOOKING_URL` in
-`.env` to the event type's public `https://cal.com/{username}/{event-slug}` page.
+Demo booking happens entirely in the chat. The bot asks for a name and an email
+(the chat profile name is used when there is one), then for a day and time, and
+books the slot through the Cal.com API; Cal.com emails the meeting details. It
+only offers Monday–Friday slots starting 10:30 am–4:45 pm in `CAL_TIMEZONE`
+(`agent/scheduling.py`), whatever the event's own availability. A taken slot
+gets the five closest open times, then ten more on request. Set `CAL_API_KEY`,
+`CAL_EVENT_TYPE_ID` and optionally `CAL_TIMEZONE` (default `Asia/Kathmandu`).
 
 Or `docker compose up --build` (published on `:8002`).
 

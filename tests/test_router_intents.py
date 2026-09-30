@@ -33,7 +33,7 @@ def test_stop_word_inside_an_answer_does_not_cancel_demo():
 
 
 def test_completed_demo_does_not_lock(monkeypatch):
-    # demo_phase None -> no lock; a plain greeting falls through to the LLM path.
+    # demo_phase None -> no lock; small talk falls through to the LLM path.
     import agent.router as router
 
     async def fake_ainvoke(_payload):
@@ -42,8 +42,35 @@ def test_completed_demo_does_not_lock(monkeypatch):
     monkeypatch.setattr(router, "structured_router",
                         types.SimpleNamespace(ainvoke=fake_ainvoke))
 
-    out = asyncio.run(router.router_node(_state("hello", demo_phase=None, demo_completed=True)))
+    out = asyncio.run(router.router_node(_state("thanks, that was quick", demo_phase=None,
+                                                 demo_completed=True)))
     assert out["intent"] == "GENERAL_CHAT"
+
+
+import pytest
+
+
+@pytest.mark.parametrize("text", [
+    "hi", "Hi!", "hello", "Hello!!", "hey 👋", "hii", "hi there",
+    "namaste", "Namaste ji", "namaskar", "नमस्ते", "नमस्कार 🙏",
+])
+def test_bare_greeting_takes_the_greeting_fast_path(text):
+    assert _run(_state(text))["intent"] == "GREETING"
+
+
+def test_greeting_with_a_question_goes_to_the_llm(monkeypatch):
+    import agent.router as router
+
+    async def fake_ainvoke(_payload):
+        return router.RouteDecision(intent="PRODUCT_QA", search_query="features")
+
+    monkeypatch.setattr(router, "structured_router",
+                        types.SimpleNamespace(ainvoke=fake_ainvoke))
+    assert _run(_state("hi, what does relayn do?"))["intent"] == "PRODUCT_QA"
+
+
+def test_greeting_inside_active_demo_stays_in_the_demo():
+    assert _run(_state("hello", demo_phase="collecting"))["intent"] == "BOOK_DEMO"
 
 
 def test_active_sales_lock():
